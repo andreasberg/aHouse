@@ -1,0 +1,197 @@
+html * {
+    box-sizing: border-box;
+}
+
+/*override bootstrap*/
+.carousel-control {
+    width: 100px;
+}
+
+#chart {
+    margin-top: 20px;
+    margin-bottom: 20px;
+    margin-left: 0px;
+    margin-right: 35px;
+    width: 100%;
+    position: relative;
+}
+
+.chart .axis text {
+    font: 10px sans-serif;
+}
+.chart .bar-y-axis text {
+    font: 8px sans-serif;
+}
+
+.chart .axis .minitempline line {
+    stroke-dasharray: 3, 3;
+}
+
+.chart .axis .domain,
+.chart .axis .tick line {
+    fill: none;
+    stroke: black;
+}
+
+.chart .bar-y-axis .domain,
+.chart .bar-y-axis .tick line {
+    fill: none;
+    stroke: black;
+}
+
+.chart .bar path {
+    stroke-width: 1.5;
+}
+
+.chart .bar path {
+    stroke: darkgrey;
+}
+
+
+.chart .bar.c-35 rect { fill:#021a24; }
+.chart .bar.c-34 rect { fill:#022337; }
+.chart .bar.c-33 rect { fill:#042c40; }
+.chart .bar.c-32 rect { fill:#042b48; }
+.chart .bar.c-31 rect { fill:#032b52; }
+.chart .bar.c-30 rect { fill:#05345b; }
+.chart .bar.c-29 rect { fill:#073d64; }
+.chart .bar.c-28 rect { fill:#09456d; }
+.chart .bar.c-27 rect { fill:#094576; }
+.chart .bar.c-26 rect { fill:#124e75; }
+.chart .bar.c-25 rect { fill:#124e7f; }
+.chart .bar.c-24 rect { fill:#1a5788; }
+.chart .bar.c-23 rect { fill:#1b6087; }
+.chart .bar.c-22 rect { fill:#216091; }
+.chart .bar.c-21 rect { fill:#296999; }
+.chart .bar.c-20 rect { fill:#2969a2; }
+.chart .bar.c-19 rect { fill:#2a71a2; }
+.chart .bar.c-18 rect { fill:#2a71ac; }
+.chart .bar.c-17 rect { fill:#337ab5; }
+.chart .bar.c-16 rect { fill:#3483b4; }
+.chart .bar.c-15 rect { fill:#3b83be; }
+.chart .bar.c-14 rect { fill:#3c8cc6; }
+.chart .bar.c-13 rect { fill:#4594cf; }
+.chart .bar.c-12 rect { fill:#469dd8; }
+.chart .bar.c-11 rect { fill:#4ea6e1; }
+.chart .bar.c-10 rect { fill:#57afea; }
+.chart .bar.c-9 rect { fill:#5fb8e9; }
+.chart .bar.c-8 rect { fill:#60c0f1; }
+.chart .bar.c-7 rect { fill:#69c9f1; }
+.chart .bar.c-6 rect { fill:#71c9f1; }
+.chart .bar.c-5 rect { fill:#78c9f1; }
+.chart .bar.c-4 rect { fill:#79d2f0; }
+.chart .bar.c-3 rect { fill:#81d2e7; }
+.chart .bar.c-2 rect { fill:#8adcdd; }
+.chart .bar.c-1 rect { fill:#92dcdd; }
+.chart .bar.c0 rect { fill:#92dcd3; }
+.chart .bar.c1 rect { fill:#99dcd3; }
+.chart .bar.c2 rect { fill:#99dcc9; }
+.chart .bar.c3 rect { fill:#9adcbf; }
+.chart .bar.c4 rect { fill:#9adcb6; }
+.chart .bar.c5 rect { fill:#9adcab; }
+.chart .bar.c6 rect { fill:#9adca1; }
+.chart .bar.c7 rect { fill:#9add96; }
+.chart .bar.c8 rect { fill:#9add8c; }
+.chart .bar.c9 rect { fill:#9add82; }
+.chart .bar.c10 rect { fill:#a2dd77; }
+.chart .bar.c11 rect { fill:#aadd6b; }
+.chart .bar.c12 rect { fill:#b3dd6b; }
+.chart .bar.c13 rect { fill:#bbdd5f; }
+.chart .bar.c14 rect { fill:#c3dd5e; }
+.chart .bar.c15 rect { fill:#cbdd5e; }
+.chart .bar.c16 rect { fill:#d4dd5e; }
+.chart .bar.c17 rect { fill:#d4dd52; }
+.chart .bar.c18 rect { fill:#dcdd52; }
+.chart .bar.c19 rect { fill:#e5dd52; }
+.chart .bar.c20 rect { fill:#ecdd52; }
+.chart .bar.c21 rect { fill:#f5dd51; }
+.chart .bar.c22 rect { fill:#f5dd43; }
+.chart .bar.c23 rect { fill:#fede42; }
+.chart .bar.c24 rect { fill:#fdd546; }
+.chart .bar.c25 rect { fill:#fdcc3a; }
+.chart .bar.c26 rect { fill:#fdc33e; }
+.chart .bar.c27 rect { fill:#fcbb41; }
+.chart .bar.c28 rect { fill:#fcb244; }
+.chart .bar.c29 rect { fill:#fca946; }
+.chart .bar.c30 rect { fill:#f3a03c; }
+.chart .bar.c31 rect { fill:#fca03b; }
+.chart .bar.c32 rect { fill:#f3973f; }
+.chart .bar.c33 rect { fill:#f28f41; }
+.chart .bar.c34 rect { fill:#f28643; }
+.chart .bar.c35 rect { fill:#f27d45; }
+.chart .bar.c36 rect { fill:#e97d45; }
+.chart .bar.c37 rect { fill:#e97452; }
+.chart .bar.c38 rect { fill:#e17352; }
+.chart .bar.c39 rect { fill:#e16c53; }
+.chart .bar.c40 rect { fill:#d86b53; }
+.chart .bar.c41 rect { fill:#d8634a; }
+.chart .bar.c42 rect { fill:#cf5a41; }
+.chart .bar.c43 rect { fill:#c65138; }
+.chart .bar.c44 rect { fill:#c6482e; }
+.chart .bar.c45 rect { fill:#bd482f; }
+.chart .bar.c46 rect { fill:#bd4823; }
+.chart .bar.c47 rect { fill:#b54025; }
+.chart .bar.c48 rect { fill:#ad4026; }
+.chart .bar.c49 rect { fill:#a43f26; }
+.chart .bar.c50 rect { fill:#9b3f27; }
+.chart .bar.c51 rect { fill:#923628; }
+.chart .bar.c52 rect { fill:#8a361d; }
+.chart .bar.c53 rect { fill:#82361e; }
+.chart .bar.c54 rect { fill:#792d14; }
+.chart .bar.c55 rect { fill:#702d15; }
+.chart .bar.c56 rect { fill:#68240c; }
+
+.chart .bar.nodata rect { fill:lightgrey; opacity:0.2;}
+
+
+.chart .annotation {
+    fill: none;
+    stroke: blue;
+    stroke-width: 1;
+    stroke-dasharray: 3, 3;
+}
+
+.chart .detailTemp {
+    fill: none;
+    stroke: blue;
+    stroke-width: 1;
+    stroke-dasharray: 3, 3;
+}
+
+
+.chart .tracker-avgtemp-movavg {
+    fill: none;
+    stroke: blue;
+    stroke-width: 1;
+    stroke-dasharray: 3, 3;
+}
+
+.chart .powerdaily, 
+.chart .powerstats {
+    fill: none;
+    stroke: blue;
+    stroke-width: 1;
+    stroke-dasharray: 3, 3;
+}
+
+.chart .overlay {
+    stroke-width: 0px;
+    fill-opacity: 0;
+}
+
+.navigator .navdata {
+    fill: lightgrey;
+    stroke-width: 0px;
+}
+
+.navigator .navline {
+    fill: none;
+    stroke: darkgrey;
+    stroke-width: 1px;
+}
+
+.navigator .viewport {
+    stroke: grey;
+    fill: black;
+    fill-opacity: 0.2;
+}
