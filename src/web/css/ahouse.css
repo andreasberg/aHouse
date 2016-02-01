@@ -153,7 +153,7 @@ html * {
 
 .chart .detailTemp {
     fill: none;
-    stroke: blue;
+    stroke: black;
     stroke-width: 1;
     stroke-dasharray: 3, 3;
 }
@@ -161,8 +161,8 @@ html * {
 
 .chart .tracker-avgtemp-movavg {
     fill: none;
-    stroke: blue;
-    stroke-width: 1;
+    stroke: black;
+    stroke-width: 0.5;
     stroke-dasharray: 3, 3;
 }
 
@@ -170,8 +170,8 @@ html * {
 .chart .powerstats {
     fill: none;
     stroke: blue;
-    stroke-width: 1;
-    stroke-dasharray: 3, 3;
+    stroke-width: 0.2;
+    /*stroke-dasharray: 3, 3;*/
 }
 
 .chart .overlay {

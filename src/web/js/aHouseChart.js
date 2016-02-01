@@ -27,9 +27,10 @@ define([
     // Requesting data (asynch) 
 //    var parseDate = d3.time.format("%d-%m-%yT%H:%M:%S").parse;
     var parseDate = d3.time.format("%d-%m-%y").parse;
+    var parseDateYmd = d3.time.format("%Y%m%d").parse;
     var parseTimestamp = d3.time.format("%Y/%m/%d %H:%M:%S").parse;  //  e.g. 2015/01/01 00:25:29
-    var parseTimestampUTC = d3.time.format.utc("%Y-%m-%d %H:%M:%S").parse;  //  e.g. 2015/01/01 00:25:29
-    var parseTimestampPower = d3.time.format.utc("%Y-%m-%d %H:%M:%S.%L").parse;
+    var parseTimestamp2 = d3.time.format("%Y-%m-%d %H:%M:%S").parse;  //  e.g. 2015/01/01 00:25:29
+    var parseTimestampPower = d3.time.format("%Y-%m-%d %H:%M:%S.%L").parse;
     //var formatDate = d3.time.format("%Y-%m-%dT%H:%M:%S%Z");
     var formatDate = d3.time.format("%Y%m%d");
 
@@ -89,8 +90,18 @@ define([
     //"ts","circuit9_cumul","circuit10_cumul","circuit11_cumul","circuit12_cumul","circuit13_cumul","circuit14_cumul","circuit15_cumul","circuit16_cumul"
 
     var preload_q = queue() // no limit to parallellism
-        .defer(dsv, "data/tempdata/tempoutside2015_average.csv", function(d) { return { date : parseDate(d.ts), temp_avg : +d.value , temp_min : +d.temp_min, temp_max : +d.temp_max, hum_avg : +d.hum_avg}; })
-        .defer(d3.csv, "data/powerDaily.csv", function(d) { 
+//        .defer(dsv, "data/tempdata/tempoutside2015_average.csv", function(d) { return { date : parseDate(d.ts), temp_avg : +d.value , temp_min : +d.temp_min, temp_max : +d.temp_max, hum_avg : +d.hum_avg}; })
+//      http://localhost:8888/clima?q=climaDaily&tz=Europe/Helsinki&datatype=Humidity
+        .defer(d3.csv, "/clima?q=climaDaily&tz=Europe/Helsinki&datatype=Temperature", function(d) {
+            return { 
+                // d.ts = '20160106'
+                date : parseDateYmd(d.ts), 
+                temp_avg : +d.avg , 
+                temp_min : +d.min, 
+                temp_max : +d.max
+            };
+        })
+/*        .defer(d3.csv, "data/powerDaily.csv", function(d) { 
             var ts = parseTimestampPower(d.ts.substring(0,d.ts.length-3)); // truncate microseconds from timestamp since JavaScript doesn't handle it well
             return { 
                 date : new Date(ts.getFullYear(),ts.getMonth(),ts.getDate()), 
@@ -105,9 +116,9 @@ define([
                 c8 : +d.circuit16_cumul
             }; 
         })
-        .defer(d3.csv, "/power?q=powerstats", function(d) {
+*/        .defer(d3.csv, "/power?q=powerstats", function(d) {
             return { 
-                date : parseTimestampUTC(d.ts), 
+                date : parseTimestamp2(d.ts), 
                 c1_use : +d.c1_use, c1_cumul : +d.c1_cumul, c1_peak : +d.c1_peak,
                 c2_use : +d.c2_use, c2_cumul : +d.c2_cumul, c2_peak : +d.c2_peak,
                 c3_use : +d.c3_use, c3_cumul : +d.c3_cumul, c3_peak : +d.c3_peak,
@@ -132,7 +143,7 @@ define([
     // Set up the drawing area
     
     console.log(d3.select('#chart').style('width'));
-    var margin = {top: 20, right: 20, bottom: 30, left: 35},
+    var margin = {top: 20, right: 35, bottom: 30, left: 35},
         width = parseInt(d3.select('#chart').style('width'), 10)-200,
         width = width - margin.left - margin.right,
         height = 500 - margin.top - margin.bottom;
@@ -160,11 +171,14 @@ define([
     var xScale = d3.time.scale(),
         yScale = d3.scale.linear(),
         yScalePower = d3.scale.linear();
+        //yScalePower = d3.scale.log();   // log scale
 
     // Set scale ranges
     xScale.range([0, width]);
-    yScale.range([height, 0]);
-    yScalePower.range([height, 0]);
+//    yScale.range([height, 0]);
+    yScale.range([height-200, 0]);
+//    yScalePower.range([height, 0]);
+    yScalePower.range([height, height-200]);
 
     // Scale domain set later based on data
 
@@ -178,9 +192,12 @@ define([
         .scale(yScale)
         .orient('left');
 
+    var formatValue = d3.format(".2s");
     var yAxisPower = d3.svg.axis()
         .scale(yScalePower)
-        .orient('left');
+        .tickFormat(function (d) { return formatValue(d);})
+        .orient('right');
+
 
     var yaxistempbar = ab.series.axistemperaturebar()
         .yScale(yScale);
@@ -329,6 +346,7 @@ define([
         yMax = 1000;
         // Set scale domains
         yScalePower.domain([yMin, yMax]).nice();
+        //yScalePower.domain([1, yMax]).nice();   // log scale
 
         plotChart.append('g')
             .attr('class', 'y_power axis')
@@ -342,8 +360,6 @@ define([
         var period = d3.time.day;
         var timeScale = d3.time.scale();
         timeScale.domain(extent).ticks(period);
-
-
         var newData = timeScale.ticks(period)
                .map(function(bucket) {
                     var foundObj = _.find(data,{ date: bucket });
@@ -364,10 +380,40 @@ define([
         return newData;
     }
 
+    function fillMissingHoursPowerStats(data,extent,fillerData,useLastObject) {
+        var period = d3.time.day;
+        var timeScale = d3.time.scale();
+        timeScale.domain(extent).ticks(period);
+        var previousObject = {};
+        var newData = timeScale.ticks(period)
+               .map(function(bucket) {
+                    var foundObj = _.find(data,{ date: bucket });
+                    var retObj;
+                    if (foundObj) {
+                        retObj = foundObj;
+/*                        if (useLastObject === true) { // update filler with object found 
+                            fillerData = foundObj;
+                        }
+*/
+                    if (useLastObject === true) { // update filler with object found 
+                            fillerData = foundObj;
+                        }
+                    } else {
+                        retObj = _.clone(fillerData);
+                        retObj.date = bucket;
+                        retObj.exception = 'nodata'; // add exception flag indicating false data
+                    }
+                    previousObject = retObj; 
+                    return retObj;
+                });
+//        console.log(newData);
+        return newData;
+    }
+
 
     // Await all (preload) data before continuing 
     preload_q.awaitAll(function(error, results) { 
-        console.log(results);
+        //console.log(results);
         // results[0] = temperature data (daily)
         // results[1] = power data (daily)
 
@@ -382,7 +428,7 @@ define([
 
         tempData = fillMissingDays(results[0],fullXextent,tempDataFiller,true); // 
 
-        var powerDataFiller = {  
+/*        var powerDataFiller = {  
                 c1 : 0,
                 c2 : 0,
                 c3 : 0,
@@ -392,21 +438,28 @@ define([
                 c7 : 0,
                 c8 : 0
             };
-        
-        var powerdata = fillMissingDays(results[1],fullXextent,powerDataFiller,true);
+*/        
+        //var powerdata = fillMissingDays(results[1],fullXextent,powerDataFiller,true);
 
-        powerStatsData = results[2];
+        var powerStatsFiller = {  
+                all_cumul : 0,
+                all_peak : 0,
+                all_use : 0
+            };
+
+        powerStatsData = fillMissingHoursPowerStats(results[1],fullXextent,powerStatsFiller,true);
+        console.log(powerStatsData);
 
         // Draw axes based on initial data
         plotAxes(tempData);
-        plotAxisPower(powerdata,powerStatsData);
+        plotAxisPower(powerStatsData);
 
         // Plot navigation chart
         plotNavChart(tempData);
 
         // Assign data to series that are drawn from start (lazy loaded data assign later)
         tempDailySeries.datum(tempData);
-        powerDailySeries.datum(powerdata);
+        //powerDailySeries.datum(powerdata);
         powerStatsSeries.datum(powerStatsData);
         tempDailyTrackerSeries.datum(tempData);    
 
@@ -419,8 +472,7 @@ define([
                     new Date(maxDate.getTime() - (navXextent*8.64e7)), 
                     new Date(maxDate.getTime() + 8.64e7)
                 ]);
-        console.log('tjopp');
-        console.log(navXScale.domain());
+        //console.log(navXScale.domain());
         navYScale.domain([-30, 30]);
 
         // Navchart axes
@@ -531,8 +583,8 @@ define([
         viewport = d3.svg.brush()
             .x(navXScale)
             .on("brush", function () {   
-                console.log('brushing');
-                console.log(navXScale.domain());             
+                //console.log('brushing');
+                //console.log(navXScale.domain());             
                 xScale.domain(viewport.empty() ? navXScale.domain() : viewport.extent());
                 redrawChart();
 //                panNavChart();
@@ -546,7 +598,7 @@ define([
                 updateZoomFromChart();
             });
 
-        console.log("creating viewport");console.log(viewport.empty());console.log(navXScale.domain());
+        //console.log("creating viewport");console.log(viewport.empty());console.log(navXScale.domain());
         navArea.append("g")
             .attr("class", "viewport")
             .call(viewport)
@@ -706,6 +758,7 @@ define([
         //console.log(psd_slice);
         powerStatsSeries.datum(powerStats_slice[0]);
         yScalePower.domain([0, d3.max(powerStats_slice[0], function(d) { return d.all_use; })]).nice();
+        //yScalePower.domain([1, d3.max(powerStats_slice[0], function(d) { return d.all_use; })]).nice(); // log scale
 
         powerStatsSeries.call(powerstats);
 
@@ -728,12 +781,20 @@ define([
         var loadDates = d3.time.days(dataDomain[0], dataDomain[1]);
 
         var lazyload_q = queue(5); // limit 5 reqs in parallell
-
+        // http://localhost:8888/clima?q=climaEvents&tz=Europe/Helsinki&mindate=160123&maxdate=160123&datatypes=Humidity
         for (var i = 0, len = loadDates.length; i < len; i++) {
             var d = formatDate(new Date(loadDates[i]));
             if (!temperatureDetailData.has(d)) { 
-                var filename = "data/tempdata/tempoutside"+d+".csv";
-                lazyload_q.defer(dsv, filename, function(d) { return { date : parseTimestamp(d.ts), temp : +d.value , hum : +d.Humidity}; });
+                var filename = "/clima?q=climaEvents&tz=Europe/Helsinki&datatypes=Temperature,Humidity&mindate="+d+"&maxdate="+d;
+                //console.log('filename ='+filename);
+                var pTsUTC = d3.time.format.utc("%Y-%m-%dT%H:%M:%S.%L").parse;  //  e.g. 2015-01-01T00:25:29.000
+                lazyload_q.defer(d3.csv, filename, function(d) { 
+                    return { 
+                        date : pTsUTC(d.ts.substring(0,d.ts.length-4)),   // '2016-01-22T22:05:04.000000Z' -> '2016-01-22T22:05:04.000' truncate microseconds(and Z) from utc timestamp since JavaScript doesn't handle it well
+                        temp : +d.Temperature, 
+                        hum : +d.Humidity
+                    }; 
+                });
             } 
         }
         lazyload_q.awaitAll(function(error, results) { 
@@ -744,6 +805,7 @@ define([
                     temperatureDetailData.set(dd,results[i]);
                 }
             }
+            //console.log(temperatureDetailData)
             var parseYmd = d3.time.format("%Y%m%d").parse
             var detailData_slice = _.partition(temperatureDetailData.entries(),function(d) { return (parseYmd(d.key) > dataDomain[0] && parseYmd(d.key) < dataDomain[1]); }); 
             var detailData_slice_map = d3.map(); // TODO: Create partitioning function for d3.map directly instead of this 2-step rebuild of subset map

@@ -1,5 +1,6 @@
 define ([
     'd3',
+//    'lodash',
     'ab'
 ], function (d3, ab) {
     'use strict';
@@ -8,11 +9,12 @@ define ([
 
         var xScale = d3.time.scale(),
             yScale = d3.scale.linear();
+            //yScale = d3.scale.log();  // log scale
 
         var powerstats = function (selection) {
             var series, avgline;
-            //var rectangleWidth = Math.floor(xScale(new Date(864e5)))-xScale(new Date(0));
-            var rectangleWidth = 2;
+            //var rectangleWidth = 1.5;
+            var rectangleWidth = _.floor(xScale(new Date(864e5)))-xScale(new Date(0))-1;
 
             selection.each(function (data) {
 
@@ -38,14 +40,16 @@ define ([
                 // Draw rectangles
                 bar.selectAll('rect')
                     .attr('x', function(d) {
-                        return xScale(d.date)-rectangleWidth/2;
+                        return xScale(d.date);
                     })
                     .attr('y', function(d) {
                         return yScale(d.all_use > 0 ? d.all_use : 0);
+//                        return yScale(d.all_use > 1 ? d.all_use : 1);   // log scale
                     })
                     .attr('width', rectangleWidth)
                     .attr('height', function(d) {
                         return Math.abs(yScale(0)-yScale(d.all_use));
+//                        return Math.abs(yScale(0)-yScale(d.all_use));     // log scale
                     });
 
 

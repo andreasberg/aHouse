@@ -18,10 +18,10 @@ define ([
         
             selection.each(function(data) {
 
-                console.log('drawing navseries');
+/*                console.log('drawing navseries');
                 console.log(navXScale.domain());
                 console.log(navXScale.range());
-                //console.log(data);
+*/                //console.log(data);
 
                 d3.selectAll('g.navigation > path').remove();
                 var navData = d3.svg.area()
