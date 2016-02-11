@@ -58,7 +58,7 @@ netatmo_token_file = basedir+'conf/netatmo_token.json'
 netatmo_access_token = None
 netatmo_access_expires = None
 
-LOG_LEVEL = 10 # 50 critical, 40 error, 30 warning, 20 info, 10 debug
+LOG_LEVEL = 20 # 50 critical, 40 error, 30 warning, 20 info, 10 debug
 dump_json = False
 
 bgloop_syncto = 5.0 # even seconds to sync to, called once when app starts
@@ -93,25 +93,14 @@ sql_statements = {
     }
 
 
-
-
-
 # DB helper function 
 def _setupsql():
-    global dbConn,dbCursor
-    dbConn = sqlite3.connect(dbFile)
-    dbCursor = dbConn.cursor()
     _log.info('Setup db')
     _log.debug('Loading sql-statements from files')
     for key in sql_statements:
         with open(dbPath+key+'.sql', 'r', encoding='utf-8') as sql_file:
             sql_statements[key] = sql_file.read()
         _log.debug('file : %s sql : \n%s' % (key,sql_statements[key]))
-    _log.info('Creating tables if not exist')
-    dbCursor.executescript(sql_statements['create_table_aClimate'])
-    dbCursor.executescript(sql_statements['create_table_aPower'])
-    dbCursor.executescript(sql_statements['create_table_aPowerStats'])
-    dbConn.commit()
     return
 
 @gen.coroutine
@@ -673,26 +662,8 @@ class TaskRunner(object):
     @gen.coroutine
     def dbGetClimateEventLastUpdate(self,args):
         _log.info('Get timestamp of latest update...')
-        # bgDbConn = sqlite3.connect(dbFile) 
-        # bgDbCursor = bgDbConn.cursor()
-
-        # Get timestamp of oldest entry of the most recent entries of each type (SQLITE)
-        # WITH temp AS (
-        #   SELECT MAX(eventTimestamp) AS ts FROM aClimateData WHERE sourceType = 'netatmo' AND sourceID = '02-00-00-03-08-1c' AND eventType = 'Temperature'
-        # UNION
-        #   SELECT MAX(eventTimestamp) AS ts FROM aClimateData WHERE sourceType = 'netatmo' AND sourceID = '02-00-00-03-08-1c' AND eventType = 'Humidity'
-        # )
-        # SELECT MIN(ts) AS minofmaxes FROM temp;
 
         # Get timestamp of oldest entry of the most recent entries of each type (MYSQL) 
-        ## sloooow
-        # SELECT MIN(tmp.ts) AS minofmaxes FROM 
-        # (   
-        #   (SELECT MAX(eventTimestamp) AS ts FROM aClimateData WHERE sourceType = 'netatmo' AND sourceID = '02-00-00-03-08-1c' AND eventType = 'Temperature')
-        #     UNION
-        #   (SELECT MAX(eventTimestamp) AS ts FROM aClimateData WHERE sourceType = 'netatmo' AND sourceID = '02-00-00-03-08-1c' AND eventType = 'Humidity')
-        # )  AS tmp
-        ## faast
         # SELECT MIN(tmp.ts) AS minofmaxes FROM 
         # (   
         #   (SELECT eventNanoTs AS ts FROM `aClimateData` WHERE sourceId='02-00-00-03-08-1c' AND eventType='Temperature' ORDER BY rowid DESC LIMIT 1)
@@ -701,40 +672,24 @@ class TaskRunner(object):
         # )  AS tmp
 
         sqlbuf = StringIO()
-        #sqlite
-        # sqlbuf.write('WITH temp AS (\n')
-        # datatypes = args['datatype'].split(',')
-        # for i,val in enumerate(datatypes):
-        #     if (i != 0): sqlbuf.write('UNION\n')
-        #     sqlbuf.write('  SELECT MAX(eventTimestamp) AS ts FROM aClimateData WHERE sourceType = \'%s\' AND sourceID = \'%s\' AND eventType = \'%s\'\n' % (args['sourceType'],args['device'],val))
-        # sqlbuf.write(')\nSELECT MIN(ts) AS minofmaxes FROM temp;\n')
 
-        #mysql
         sqlbuf.write('SELECT MIN(tmp.ts) AS minofmaxes FROM\n(\n')
         datatypes = args['datatype'].split(',')
         for i,val in enumerate(datatypes):
             if (i != 0): sqlbuf.write('UNION\n')
             sqlbuf.write('  (SELECT eventNanoTs AS ts FROM aClimateData WHERE sourceId= \'%s\' AND eventType=\'%s\' ORDER BY rowid DESC LIMIT 1)\n' % (args['device'],val))
-            #sqlbuf.write('  (SELECT MAX(eventNanoTs) AS ts FROM aClimateData WHERE sourceType = \'%s\' AND sourceID = \'%s\' AND eventType = \'%s\')\n' % (args['sourceType'],args['device'],val))
         sqlbuf.write(') AS tmp\n')
 
         _log.debug('SQL: \n%s' % sqlbuf.getvalue())
         result = None
         try:
-            #result = yield DBHelperSQLITE.dbExecute(_dbHelperSQLITE,sqlbuf.getvalue(),parseresp=None,tzname=None,script=False)
             result = yield DBHelperMYSQL.dbExecute(_dbHelperMYSQL,sqlbuf.getvalue(),parseresp=None)
         except Exception as e:
             _log.warning('Error during database read : %s' % str(e))
             pass
-        # example:
-        # result = (None,)
-        # result = ('2016-02-02T06:57:57.000000Z',)
-        # result[0] = 2016-02-02T06:57:57.000000Z'
         _log.debug('result: %s' % result)
         _log.debug('result[0]: %s' % result[0])
         _log.debug('type(result[0]): %s' % type(result[0])) # mysql returns tuple!
-        #sqlite
-        #ts = float(0) if result[0] is None else (datetime.strptime(('%s' % result[0]), df) - dt0).total_seconds()
         #mysql (nanosec)
         ts = float(0) if result[0] is None else (float('%s' % result[0])/10**9)  # in nanosecs if mysql
         _log.info('Got timestamp \'%s\' : %f' % (result[0],ts))
@@ -763,14 +718,10 @@ class TaskRunner(object):
     @gen.coroutine
     def retrieveAndStoreNetatmoData(self,token):
         
-        #t1 = int(time.mktime((datetime.date(2014,04,10)).timetuple()))
-        #t2 = t1 + 3600
         min_s = "2014-04-10T00:00:00.000000Z"  # no data available previous to this
-        #min_s = "2016-01-23T00:00:00.000000Z"  # no data available previous to this
         now = time.time() # current time in epoch seconds (float)
 
         args = {}
-        #self.arguments['device']='03-00-00-01-21-a2'
         args['device']=self.arguments['device'] if self.arguments['device'] is not None else '02-00-00-03-08-1c'
         args['datatype']=self.arguments['datatype'] if self.arguments['datatype'] is not None else 'Temperature,Humidity'
         args['loctype']=self.arguments['loctype'] if self.arguments['loctype'] is not None else 'outdoor'
@@ -841,7 +792,6 @@ class TaskRunner(object):
             token = None
             with open(netatmo_token_file, 'r', encoding='utf-8') as token_file:
                 token = json.loads(token_file.read())
-            ##print('Token ' + token)
             if token is not None:
                 delta = token['created']+token['expires_in']-time.time()
                 _log.info('Token valid for %d seconds still' % delta )
@@ -953,8 +903,6 @@ class TaskRunner(object):
                     httpresponse = yield http_client.fetch(http_request)
                     responseJson = tornado.escape.to_basestring(httpresponse.body)
                     responseDict = tornado.escape.json_decode(httpresponse.body)
-                    
-                    #pprint.pprint(tornado.escape.json_encode(responseDict))
                     if dump_json:
                         with open((logdir+'netatmo_measure_dump_%s.json' % epoch_time), 'w', encoding='utf-8') as resp_file:
                             resp_file.write(tornado.escape.json_encode(responseDict))
@@ -1027,19 +975,11 @@ class ClimaDataHandler(web.RequestHandler):
         query = None
         resp = None
 
-        if (q == 'dbVersion'):
-            # query = 'SELECT sqlite_version();'
-            # _log.debug('SQL: \n%s' % query)
-            # resp = yield DBHelperSQLITE.dbExecute(_dbHelperSQLITE,query)
-            resp = 'Not implemented'
-        elif (q == 'all'):
+        if (q == 'all'):
             table = self.get_argument('table','aClimateDevices')
             query = ('SELECT * FROM %s' % table)
             _log.debug('SQL: \n%s' % query)
             resp = yield DBHelperSQLITE.dbExecute(_dbHelperSQLITE,query)
-        elif (q == 'test'):
-            arg = self.get_argument('arg','No Arg')
-            _log.info('Testing arguments : arg = \'%s\'' % arg)
         elif (q == 'climaDaily'):
             args = {}
             args['datatypes'] = self.get_argument('datatypes','Temperature').split(',') # default Temperature,Humidity other: CO2,Pressure etc
@@ -1086,8 +1026,6 @@ class ClimaDataHandler(web.RequestHandler):
             mints = args['mints']
             maxts = args['maxts']
 
-            #usecache = False if maxts-mints < pd.Timedelta(days=2) else usecache # always skip cache if daterange less than 2days, direct db read is faster.
-
             readyCaches = yield DBHelperMYSQL.haveCaches(_dbHelperMYSQL,args)
             if usecache == 'True' and readyCaches and len(readyCaches)>0:
                 _log.info('Reading from data caches')
@@ -1115,54 +1053,9 @@ class ClimaDataHandler(web.RequestHandler):
                 d.columns = args['datatypes']
                 resp = d.to_csv(header=True,date_format=df,quoting=csv.QUOTE_NONNUMERIC)
             else:
-                _log.info('Reading from db')
-                # csv:
-                # Timestamp;ts;value;Humidity
-                # 1420063242;"2015/01/01 00:00:42";2.4;99
+                _log.warning('Data caches not ready or unknown request for request %s' % self.request.uri)
+                resp = "Data not available"
 
-                # SELECT 
-                #    a.eventTimestamp, 
-                #    COALESCE(a.value,'') as "Temperature" 
-                #    ,COALESCE((SELECT b.value FROM aClimateData b 
-                #              WHERE b.eventTimestamp = a.eventTimestamp 
-                #              AND eventType = 'Humidity'
-                #              AND b.rowid != a.rowid 
-                #              LIMIT 1),'') as "Humidity1",
-                #    ,COALESCE((SELECT c.value FROM aClimateData c 
-                #              WHERE c.eventTimestamp = a.eventTimestamp 
-                #              AND eventType = 'Humidity'
-                #              AND c.rowid != a.rowid 
-                #              LIMIT 1),'') as "Humidity2"
-                # FROM aClimateData a 
-                # WHERE eventType = 'Temperature'
-                # AND eventTimestamp > '2016-01-01T00:00:00.000000Z'
-                # AND eventTimestamp < '2016-01-01T23:59:59.999999Z' 
-                # GROUP BY a.eventTimestamp
-                sqlbuf = StringIO()
-                sqlbuf.write('SELECT \n')
-                sqlbuf.write('  t0.eventTimestamp as ts,\n')
-
-                for i,datatype in enumerate(args['datatypes']):
-                    if (i == 0): 
-                        sqlbuf.write('  COALESCE(t0.value,\'\') as \'%s\'\n' % args['datatypes'][0])
-                    else:
-                        sqlbuf.write('  ,COALESCE((SELECT t%d.value FROM aClimateData t%d\n' % (i,i)) 
-                        sqlbuf.write('  WHERE t%d.eventNanoTs = t0.eventNanoTs\n' % i)
-                        sqlbuf.write('  AND sourceId = \'%s\'\n' % args['device'])
-                        sqlbuf.write('  AND eventType = \'%s\'\n' % datatype)
-                        sqlbuf.write('  AND t%d.rowid != t0.rowid\n' % i) 
-                        sqlbuf.write('  LIMIT 1),\'\') as \'%s\'\n' % datatype)
-                sqlbuf.write('FROM aClimateData t0\n') 
-                sqlbuf.write('WHERE eventType = \'%s\'\n' % args['datatypes'][0])
-                sqlbuf.write('AND sourceId = \'%s\'\n' % args['device'])
-                sqlbuf.write('AND eventNanoTs >= \'%s\'\n' % mints.value)    #pd.Timestamp.value return nanoseconds since epoch
-                sqlbuf.write('AND eventNanoTs <= \'%s\'\n' % maxts.value) 
-                sqlbuf.write('ORDER BY t0.eventNanoTs\n')
-
-                query = sqlbuf.getvalue()
-                _log.debug('SQL: \n%s' % query)
-                _log.info('Reading from MYSQL')
-                resp = yield DBHelperMYSQL.dbExecute(_dbHelperMYSQL,query,parseresp='CSV')
         else:
             _log.info('Invalid query')
 
@@ -1180,10 +1073,6 @@ class EnergyDataHandler(web.RequestHandler):
         query = None
         if (q == 'all'):
             query = 'SELECT * FROM aPower'
-            _log.debug('SQL: \n%s' % query)
-            resp = yield DBHelperSQLITE.dbExecute(_dbHelperSQLITE,query,parseresp='CSV')
-        elif (q == 'dbVersion'):
-            query = 'SELECT sqlite_version();'
             _log.debug('SQL: \n%s' % query)
             resp = yield DBHelperSQLITE.dbExecute(_dbHelperSQLITE,query,parseresp='CSV')
         elif (q == 'dailyLast'):
@@ -1204,7 +1093,6 @@ class EnergyDataHandler(web.RequestHandler):
             args['aggrto'] = self.get_argument('aggrto',None)
             args['aggrhow'] = self.get_argument('aggrhow','sum')
             args['aggrlabel'] = self.get_argument('aggrlabel','left')
-
 
             args = yield parseRequestDates(args)
             mints = args['mints']
@@ -1285,8 +1173,6 @@ class EnergyDataHandler(web.RequestHandler):
 
         else:
             _log.info('Invalid query')
-
-
 
         self.write(str(resp))
         _log.info('Request done in %.3fs' % (time.time()-t0))
