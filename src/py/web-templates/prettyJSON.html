@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <title>JSON Sample</title>
+    <style>
+pre {
+   background-color: ghostwhite;
+   border: 1px solid silver;
+   padding: 10px 20px;
+   margin: 20px;
+   font-size: 10px;
+   }
+.json-key {
+   color: brown;
+   }
+.json-value {
+   color: navy;
+   }
+.json-string {
+   color: olive;
+   }
+    </style>
+</head>
+<body>
+    <pre><code id="prettyjson"></code></pre>
+    <script src="http://code.jquery.com/jquery-1.7.1.min.js"></script>
+    <script>
+        // Jinja2 adds filename here
+        var jsonfile = '{{ filename }}';
+        if (!library)
+            var library = {};
+
+        library.json = {
+           replacer: function(match, pIndent, pKey, pVal, pEnd) {
+              var key = '<span class=json-key>';
+              var val = '<span class=json-value>';
+              var str = '<span class=json-string>';
+              var r = pIndent || '';
+              if (pKey)
+                 r = r + key + pKey.replace(/[": ]/g, '') + '</span>: ';
+              if (pVal)
+                 r = r + (pVal[0] == '"' ? str : val) + pVal + '</span>';
+              return r + (pEnd || '');
+              },
+           prettyPrint: function(obj) {
+              var jsonLine = /^( *)("[\w]+": )?("[^"]*"|[\w.+-]*)?([,[{])?$/mg;
+              return JSON.stringify(obj, null, 3)
+                 .replace(/&/g, '&amp;').replace(/\\"/g, '&quot;')
+                 .replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                 .replace(jsonLine, library.json.replacer);
+              }
+        };
+        // Assign handlers immediately after making the request,
+        // and remember the jqxhr object for this request
+        var jqxhr = $.getJSON(jsonfile, function(data) 
+            {
+                var output = library.json.prettyPrint(data);
+                console.log(output);
+                $('#prettyjson').html(output);
+                console.log( "success" );
+            })
+            .done(function() { console.log( "done" );})
+            .fail(function() { console.log( "fail" ); })
+            .always(function() { console.log( "always" ); });
+    </script>
+</body>
+</html>

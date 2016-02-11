@@ -8,8 +8,7 @@ define ([
 
         var xScale = d3.time.scale(),
             yScale = d3.scale.linear(),
-            yValue = 0,
-            css = '';
+            yValue = 0;
 
         var temperatureintraday = function (selection) {
             var linesegments;
@@ -24,9 +23,10 @@ define ([
                 
 
 /*                console.log('draw');
-                console.log(ds);
                 console.log(ds.keys());
 */
+                //console.log(ds);
+
 //                d3.select('.detailTemp').selectAll('.linesegment').remove();
                 linesegments = d3.select('.detailTemp').selectAll('.linesegment')
                     .data(ds.keys()); 
@@ -46,7 +46,7 @@ define ([
                     //console.log(this.get(d));
                     var line = d3.svg.line()
                         .x(function(d) {return xScale(d.date); })
-                        .y(function(d) {return yScale(d.temp); });
+                        .y(function(d) {/*console.log('d.temp: '+d.temp+' yScaled: '+yScale(d.temp));*/ return yScale(d.temp); });
 
                     //console.log(data2);
                     var selector = "g#linesegment"+d+" > path";

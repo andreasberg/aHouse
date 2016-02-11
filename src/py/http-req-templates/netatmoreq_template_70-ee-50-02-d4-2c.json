@@ -1,0 +1,16 @@
+{
+    "url": "https://api.netatmo.com/api/getmeasure",
+    "headers": {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
+    },
+    "body": {
+        "access_token": "REPLACE",
+        "date_begin": "REPLACE",
+        "date_end": "REPLACE",
+        "device_id": "70:ee:50:02:d4:2c",
+        "module_id": "70:ee:50:02:d4:2c",
+        "optimize": "false",
+        "scale": "max",
+        "type": "Temperature,Humidity,CO2,Noise,Pressure"
+    }
+}

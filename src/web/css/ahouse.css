@@ -167,11 +167,18 @@ html * {
 }
 
 .chart .powerdaily, 
-.chart .powerstats {
+.chart .powerstats,
+.chart .energystatsright {
     fill: none;
     stroke: blue;
     stroke-width: 0.2;
     /*stroke-dasharray: 3, 3;*/
+}
+
+.chart .energystatsleft {
+    fill: none;
+    stroke: darkred;
+    stroke-width: 0.2;
 }
 
 .chart .overlay {
@@ -180,18 +187,27 @@ html * {
 }
 
 .navigator .navdata {
-    fill: lightgrey;
+    fill: rgb(153, 204, 255);
+    opacity: 1;
+    stroke-opacity: 0;
     stroke-width: 0px;
 }
 
 .navigator .navline {
     fill: none;
-    stroke: darkgrey;
+    stroke: rgb(0, 102, 204);
     stroke-width: 1px;
 }
 
 .navigator .viewport {
-    stroke: grey;
-    fill: black;
-    fill-opacity: 0.2;
+    stroke: #C0C0C0;
+    stroke-width: 1px;
+    fill: rgba(128, 179, 236, 0.3);
+/*    fill-opacity: 0.2;*/
+}
+.carousel-control.left {
+    background-image:linear-gradient(to left,rgba(128, 179, 236,.0001) 0,rgba(128, 179, 236, .1) 100%)
+}
+.carousel-control.right {
+    background-image:linear-gradient(to right,rgba(128, 179, 236,.0001) 0,rgba(128, 179, 236, .1) 100%)
 }

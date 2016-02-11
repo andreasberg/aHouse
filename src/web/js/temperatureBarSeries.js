@@ -48,6 +48,8 @@ define ([
                     .attr('y', function(d) {
                         return yScale(d.temp_max);
                     })
+                    .attr('rx', 2 )
+                    .attr('ry', 2 )
                     .attr('width', rectangleWidth )
                     .attr('height', function(d) {
                         return yScale(d.temp_min)-yScale(d.temp_max);

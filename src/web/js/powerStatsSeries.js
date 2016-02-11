@@ -1,6 +1,5 @@
 define ([
     'd3',
-//    'lodash',
     'ab'
 ], function (d3, ab) {
     'use strict';
@@ -11,17 +10,20 @@ define ([
             yScale = d3.scale.linear();
             //yScale = d3.scale.log();  // log scale
 
+        var sidemargin = 5
         var powerstats = function (selection) {
             var series, avgline;
             //var rectangleWidth = 1.5;
-            var rectangleWidth = _.floor(xScale(new Date(864e5)))-xScale(new Date(0))-1;
+            var rectangleHalfWidth = _.floor((xScale(new Date(36e5))-xScale(new Date(0)))/2);
+            
+            (rectangleHalfWidth > sidemargin) && (rectangleHalfWidth -= sidemargin)
 
             selection.each(function (data) {
 
-                //console.log("drawing bars");
+//                console.log("drawing power bars");
                 series = d3.select(this);
 
-                //console.log(series);
+//                console.log(data);
 
                 var bar = series.selectAll('.bar')
                     .data(data, function(d) { 
@@ -40,15 +42,17 @@ define ([
                 // Draw rectangles
                 bar.selectAll('rect')
                     .attr('x', function(d) {
-                        return xScale(d.date);
+                        return xScale(d.date)-rectangleHalfWidth;
                     })
                     .attr('y', function(d) {
-                        return yScale(d.all_use > 0 ? d.all_use : 0);
+//                        console.log('ps y0 ' + yScale(0))
+//                        console.log('ps d.value = '+d.value+' yScale(d.value) = '+yScale(d.value > 0 ? d.value : 0))
+                        return yScale(d.value > 0 ? d.value : 0);
 //                        return yScale(d.all_use > 1 ? d.all_use : 1);   // log scale
                     })
-                    .attr('width', rectangleWidth)
+                    .attr('width', rectangleHalfWidth*2)
                     .attr('height', function(d) {
-                        return Math.abs(yScale(0)-yScale(d.all_use));
+                        return Math.abs(yScale(0)-yScale(d.value));
 //                        return Math.abs(yScale(0)-yScale(d.all_use));     // log scale
                     });
 
