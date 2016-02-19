@@ -16,6 +16,7 @@ from tornado_mysql import pools
 import MySQLdb.cursors
 #import pymysql.cursors
 import pandas as pd
+import numpy as np
 # from sqlalchemy.ext.declarative import declarative_base
 # from sqlalchemy import Table
 from sqlalchemy import create_engine
@@ -26,7 +27,7 @@ from datetime import datetime,timezone
 import pytz
 from tzlocal import get_localzone
 import time
-
+from apscheduler.schedulers.tornado import TornadoScheduler
 
 # Parsing
 import json
@@ -61,7 +62,7 @@ netatmo_access_expires = None
 LOG_LEVEL = 20 # 50 critical, 40 error, 30 warning, 20 info, 10 debug
 dump_json = False
 
-bgloop_syncto = 5.0 # even seconds to sync to, called once when app starts
+bgloop_syncto = 60.0 # even seconds to sync to, called once when app starts
 bgloop= 300.0 # default loop interval in seconds
 dbAggregation_running = True # start on server startup
 dbAggregation_runonce = False
@@ -75,6 +76,11 @@ dbCursor = None
 _dbHelperMYSQL = None
 _dbHelperSQLITE = None
 
+#APScheduler
+_scheduler = None
+
+#cache update request stack
+_cacheupdstack = []
 
 # 2015-11-10T07:46:13.771123Z 
 df = '%Y-%m-%dT%H:%M:%S.%fZ'  # datetime format used in db, always UTC time, microsecond accuracy
@@ -94,9 +100,8 @@ sql_statements = {
 
 
 # DB helper function 
-def _setupsql():
-    _log.info('Setup db')
-    _log.debug('Loading sql-statements from files')
+def setupsql():
+    _log.info('Setup db, loading sql-statements from files')
     for key in sql_statements:
         with open(dbPath+key+'.sql', 'r', encoding='utf-8') as sql_file:
             sql_statements[key] = sql_file.read()
@@ -122,8 +127,8 @@ def parseRequestDates(args):
     else:
         # today 00:00
         maxts = pd.Timestamp(datetime.utcnow()).tz_localize('UTC').tz_convert(tzname) + pd.tseries.offsets.Day(normalize=True) - pd.tseries.offsets.Nano() # today at 1us  before midnight in tz
-    _log.info('Min ts = %s' % mints)
-    _log.info('Max ts = %s' % maxts)
+    _log.debug('Min ts = %s' % mints)
+    _log.debug('Max ts = %s' % maxts)
     args['mints']=mints
     args['maxts']=maxts
     return args
@@ -192,207 +197,232 @@ class DBHelperMYSQL(object):
 
     @gen.coroutine
     def prepareDataCache(self):
+        _log.info('Preparing to initialize data caches')
+        self.dataCaches = {
+                'outdoortemperature': {
+                    'columns': ['value'],
+                    'sql':'SELECT eventNanoTs,value FROM aClimateData WHERE sourceId="02-00-00-03-08-1c" AND eventType="Temperature"',
+                    'index_col':['eventNanoTs'],
+                    'parse_dates':{'eventNanoTs':'ns'},
+                    # 'parse_dates':{'eventNanoTs':'%Y-%m-%dT%H:%M:%S.%fZ'},
+                    'cache':None
+                # },
+                # 'outdoorrest': {
+                #     'columns': ['value'],
+                #     'sql':'SELECT eventNanoTs,eventType,value FROM aClimateData WHERE sourceId="02-00-00-03-08-1c" AND eventType != "Temperature"',
+                #     'index_col':['eventNanoTs','eventType'],
+                #     'parse_dates':{'eventNanoTs':'ns'},
+                #     'cache':None
+                # },
+                # 'indoortemperature': {
+                #     'columns': ['value'],
+                #     'sql':'SELECT eventNanoTs,sourceId,value FROM aClimateData WHERE eventType="Temperature" AND (sourceId="70-ee-50-02-d4-2c" OR sourceId="03-00-00-01-21-a2")',
+                #     'index_col':['eventNanoTs','sourceId'],
+                #     'parse_dates':{'eventNanoTs':'ns'},
+                #     'cache':None
+                # },
+                # 'indoor1rest': {
+                #     'columns': ['value'],
+                #     'sql':'SELECT eventNanoTs,eventType,value FROM aClimateData WHERE sourceId="70-ee-50-02-d4-2c" AND eventType != "Temperature"',
+                #     'index_col':['eventNanoTs','eventType'],
+                #     'parse_dates':{'eventNanoTs':'ns'},
+                #     'cache':None
+                # },
+                # 'indoor2rest': {
+                #     'columns': ['value'],
+                #     'sql':'SELECT eventNanoTs,eventType,value FROM aClimateData WHERE sourceId="03-00-00-01-21-a2" AND eventType != "Temperature"',
+                #     'index_col':['eventNanoTs','eventType'],
+                #     'parse_dates':{'eventNanoTs':'ns'},
+                #     'cache':None
+                # },
+                # 'outdoorrain': {
+                #     'columns': ['value'],
+                #     'sql':'SELECT eventNanoTs,value FROM aClimateData WHERE sourceId="05-00-00-00-16-88" AND eventType="Rain"',
+                #     'index_col':['eventNanoTs'],
+                #     'parse_dates':{'eventNanoTs':'ns'},
+                #     'cache':None
+                },
+                'energywater': {
+                    'columns': ['c1_delta','c1_cumul','c1_peak','c1_indirect','c2_delta','c2_cumul','c2_peak','c2_indirect','c3_delta','c3_cumul','c3_peak','c3_indirect','measures_count'],
+                    'sql':'SELECT groupNanoTs as eventNanoTs,c1_delta,c1_cumul,c1_peak,c1_indirect,c2_delta,c2_cumul,c2_peak,c3_indirect,c3_delta,c3_cumul,c3_peak,c3_indirect,measures_count FROM aWaterEnergyStats',
+                    'index_col':['eventNanoTs'],
+                    'parse_dates':{'eventNanoTs':'ns'},
+                    'cache':None
+                # },
+                # 'energyfloor': {
+                #     'columns': ['accessNumber','heatingEnergy','volume','temp1','temp2','power','flow'],
+                #     'sql':'SELECT recordNanoTs,accessNumber,heatingEnergy,volume,temp1,temp2,power,flow FROM aMbusMC302Record WHERE id="67285016"',
+                #     'index_col':['recordNanoTs'],
+                #     'parse_dates':{'recordNanoTs':'ns'},
+                #     'cache':None
+                # },
+                # 'energywoodboiler': {
+                #     'columns': ['accessNumber','heatingEnergy','volume','temp1','temp2','power','flow'],
+                #     'sql':'SELECT recordNanoTs,accessNumber,heatingEnergy,volume,temp1,temp2,power,flow FROM aMbusMC302Record WHERE id="67285015"',
+                #     'index_col':['recordNanoTs'],
+                #     'parse_dates':{'recordNanoTs':'ns'},
+                #     'cache':None
+                # },
+                # 'energywarmwater': {
+                #     'columns': ['accessNumber','heatingEnergy','volume','temp1','temp2','power','flow'],
+                #     'sql':'SELECT recordNanoTs,accessNumber,heatingEnergy,volume,temp1,temp2,power,flow FROM aMbusMC302Record WHERE id="67280331"',
+                #     'index_col':['recordNanoTs'],
+                #     'parse_dates':{'recordNanoTs':'ns'},
+                #     'cache':None
+                },
+                'energyelectricity': {
+                    'columns': ['c1_use','c1_cumul','c1_peak','c2_use','c2_cumul','c2_peak','c3_use','c3_cumul','c3_peak','c4_use','c4_cumul','c4_peak','c5_use','c5_cumul','c5_peak','c6_use','c6_cumul','c6_peak','c7_use','c7_cumul','c7_peak','c8_use','c8_cumul','c8_peak','all_use','all_cumul','all_peak','measures_count'],
+                    'sql':'SELECT groupNanoTs as eventNanoTs,c1_use,c1_cumul,c1_peak,c2_use,c2_cumul,c2_peak,c3_use,c3_cumul,c3_peak,c4_use,c4_cumul,c4_peak,c5_use,c5_cumul,c5_peak,c6_use,c6_cumul,c6_peak,c7_use,c7_cumul,c7_peak,c8_use,c8_cumul,c8_peak,all_use,all_cumul,all_peak,measures_count FROM aPowerStats',
+                    'index_col':['eventNanoTs'],
+                    'parse_dates':{'eventNanoTs':'ns'},
+                    'cache':None
+                # },
+                # 'wholetable': {
+                #     'columns': ['value'],
+                #     'sql':'SELECT eventNanoTs,sourceId,eventType,value FROM aClimateData',
+                #     'index_col':['eventNanoTs','sourceId','eventType'],
+                #     'parse_dates':{'eventNanoTs':'ns'},
+                #     'cache':None
+                }
+            }
+        self.devToCacheMap = {
+                '02-00-00-03-08-1c': {
+                    'Temperature':'outdoortemperature',
+                    'Humidity':'outdoorrest',
+                    },
+                '70-ee-50-02-d4-2c': {
+                    'Temperature':'indoortemperature',
+                    'Humidity':'indoor1rest',
+                    'Pressure':'indoor1rest',
+                    'CO2':'indoor1rest',
+                    'Noise':'indoor1rest'
+                    },
+                '03-00-00-01-21-a2': {
+                    'Temperature':'indoortemperature',
+                    'Humidity':'indoor1rest',
+                    'Co2':'indoor1rest'
+                },
+                '05-00-00-00-16-88': {
+                    'Temperature':'indoortemperature',
+                    'Humidity':'indoor1rest',
+                    'CO2':'indoor1rest'
+                },
+                '67285016':{
+                    'accessNumber':'energyfloor',
+                    'heatingEnergy':'energyfloor',
+                    'volume':'energyfloor',
+                    'temp1':'energyfloor',
+                    'temp2':'energyfloor',
+                    'power':'energyfloor',
+                    'flow':'energyfloor'
+                },
+                '67285015':{
+                    'accessNumber':'energywoodboiler',
+                    'heatingEnergy':'energywoodboiler',
+                    'volume':'energywoodboiler',
+                    'temp1':'energywoodboiler',
+                    'temp2':'energywoodboiler',
+                    'power':'energywoodboiler',
+                    'flow':'energywoodboiler'
+                },
+                '67280331':{
+                    'accessNumber':'energywarmwater',
+                    'heatingEnergy':'energywarmwater',
+                    'volume':'energywarmwater',
+                    'temp1':'energywarmwater',
+                    'temp2':'energywarmwater',
+                    'power':'energywarmwater',
+                    'flow':'energywarmwater'
+                },
+                'water':{
+                    'c1_delta':'energywater',
+                    'c1_cumul':'energywater',
+                    'c1_peak':'energywater',
+                    'c2_delta':'energywater',
+                    'c2_cumul':'energywater',
+                    'c2_peak':'energywater',
+                    'c3_delta':'energywater',
+                    'c3_cumul':'energywater',
+                    'c3_peak':'energywater',
+                },
+                'electricity':{
+                    'c1_use':'energyelectricity',
+                    'c1_cumul':'energyelectricity',
+                    'c1_peak':'energyelectricity',
+                    'c2_use':'energyelectricity',
+                    'c2_cumul':'energyelectricity',
+                    'c2_peak':'energyelectricity',
+                    'c3_use':'energyelectricity',
+                    'c3_cumul':'energyelectricity',
+                    'c3_peak':'energyelectricity',
+                    'c4_use':'energyelectricity',
+                    'c4_cumul':'energyelectricity',
+                    'c4_peak':'energyelectricity',
+                    'c5_use':'energyelectricity',
+                    'c5_cumul':'energyelectricity',
+                    'c5_peak':'energyelectricity',
+                    'c6_use':'energyelectricity',
+                    'c6_cumul':'energyelectricity',
+                    'c6_peak':'energyelectricity',
+                    'c7_use':'energyelectricity',
+                    'c7_cumul':'energyelectricity',
+                    'c7_peak':'energyelectricity',
+                    'c8_use':'energyelectricity',
+                    'c8_cumul':'energyelectricity',
+                    'c8_peak':'energyelectricity',
+                    'all_use':'energyelectricity',
+                    'all_cumul':'energyelectricity',
+                    'all_peak':'energyelectricity',
+                    'measures_count':'energyelectricity'
+                }
+
+            }    
+        return self.dataCaches
+
+    @gen.coroutine
+    def refreshDataCache(self):
+        global _cacheupdstack
         profile_mem = False
         if profile_mem:
             _log.info('Calculating mem usage')
             memory_usage('')
-        _log.info('Preparing to initialize caches')
-        starttime = time.time()
+        
+        if not len(_cacheupdstack):
+            _log.info('No cache updates in queue')
+        else:
+            _log.info('Preparing to initialize caches : %s' % _cacheupdstack)
 
-        # ({'device':'02-00-00-03-08-1c','datatype':'Temperature,Humidity','loctype':'outdoor','sourceType':'netatmo'})
-        # ({'device':'70-ee-50-02-d4-2c','datatype':'Temperature,Humidity,CO2,Pressure,Noise','loctype':'indoor','sourceType':'netatmo'})
-        # ({'device':'03-00-00-01-21-a2','datatype':'Temperature,Humidity,CO2','loctype':'indoor','sourceType':'netatmo'})
-        # ({'device':'05-00-00-00-16-88','datatype':'Rain','loctype':'outdoor','sourceType':'netatmo'})
+            if self.dataCaches is None:
+                res = yield self.prepareDataCache()
 
-        self.devToCacheMap = {
-            '02-00-00-03-08-1c': {
-                'Temperature':'outdoortemperature',
-                'Humidity':'outdoorrest',
-                },
-            '70-ee-50-02-d4-2c': {
-                'Temperature':'indoortemperature',
-                'Humidity':'indoor1rest',
-                'Pressure':'indoor1rest',
-                'CO2':'indoor1rest',
-                'Noise':'indoor1rest'
-                },
-            '03-00-00-01-21-a2': {
-                'Temperature':'indoortemperature',
-                'Humidity':'indoor1rest',
-                'Co2':'indoor1rest'
-            },
-            '05-00-00-00-16-88': {
-                'Temperature':'indoortemperature',
-                'Humidity':'indoor1rest',
-                'CO2':'indoor1rest'
-            },
-            '67285016':{
-                'accessNumber':'energyfloor',
-                'heatingEnergy':'energyfloor',
-                'volume':'energyfloor',
-                'temp1':'energyfloor',
-                'temp2':'energyfloor',
-                'power':'energyfloor',
-                'flow':'energyfloor'
-            },
-            '67285015':{
-                'accessNumber':'energywoodboiler',
-                'heatingEnergy':'energywoodboiler',
-                'volume':'energywoodboiler',
-                'temp1':'energywoodboiler',
-                'temp2':'energywoodboiler',
-                'power':'energywoodboiler',
-                'flow':'energywoodboiler'
-            },
-            '67280331':{
-                'accessNumber':'energywarmwater',
-                'heatingEnergy':'energywarmwater',
-                'volume':'energywarmwater',
-                'temp1':'energywarmwater',
-                'temp2':'energywarmwater',
-                'power':'energywarmwater',
-                'flow':'energywarmwater'
-            },
-            'water':{
-                'c1_delta':'energywater',
-                'c1_cumul':'energywater',
-                'c1_peak':'energywater',
-                'c2_delta':'energywater',
-                'c2_cumul':'energywater',
-                'c2_peak':'energywater',
-                'c3_delta':'energywater',
-                'c3_cumul':'energywater',
-                'c3_peak':'energywater',
-            },
-            'electricity':{
-                'c1_use':'energyelectricity',
-                'c1_cumul':'energyelectricity',
-                'c1_peak':'energyelectricity',
-                'c2_use':'energyelectricity',
-                'c2_cumul':'energyelectricity',
-                'c2_peak':'energyelectricity',
-                'c3_use':'energyelectricity',
-                'c3_cumul':'energyelectricity',
-                'c3_peak':'energyelectricity',
-                'c4_use':'energyelectricity',
-                'c4_cumul':'energyelectricity',
-                'c4_peak':'energyelectricity',
-                'c5_use':'energyelectricity',
-                'c5_cumul':'energyelectricity',
-                'c5_peak':'energyelectricity',
-                'c6_use':'energyelectricity',
-                'c6_cumul':'energyelectricity',
-                'c6_peak':'energyelectricity',
-                'c7_use':'energyelectricity',
-                'c7_cumul':'energyelectricity',
-                'c7_peak':'energyelectricity',
-                'c8_use':'energyelectricity',
-                'c8_cumul':'energyelectricity',
-                'c8_peak':'energyelectricity',
-                'all_use':'energyelectricity',
-                'all_cumul':'energyelectricity',
-                'all_peak':'energyelectricity',
-                'measures_count':'energyelectricity'
-            }
+            starttime = time.time()
 
-        }
-        self.dataCaches = {
-            'outdoortemperature': {
-                'columns': ['value'],
-                'sql':'SELECT eventNanoTs,value FROM aClimateData WHERE sourceId="02-00-00-03-08-1c" AND eventType="Temperature"',
-                'index_col':['eventNanoTs'],
-                'parse_dates':{'eventNanoTs':'ns'},
-                # 'parse_dates':{'eventNanoTs':'%Y-%m-%dT%H:%M:%S.%fZ'},
-                'cache':None
-            # },
-            # 'outdoorrest': {
-            #     'columns': ['value'],
-            #     'sql':'SELECT eventNanoTs,eventType,value FROM aClimateData WHERE sourceId="02-00-00-03-08-1c" AND eventType != "Temperature"',
-            #     'index_col':['eventNanoTs','eventType'],
-            #     'parse_dates':{'eventNanoTs':'ns'},
-            #     'cache':None
-            # },
-            # 'indoortemperature': {
-            #     'columns': ['value'],
-            #     'sql':'SELECT eventNanoTs,sourceId,value FROM aClimateData WHERE eventType="Temperature" AND (sourceId="70-ee-50-02-d4-2c" OR sourceId="03-00-00-01-21-a2")',
-            #     'index_col':['eventNanoTs','sourceId'],
-            #     'parse_dates':{'eventNanoTs':'ns'},
-            #     'cache':None
-            # },
-            # 'indoor1rest': {
-            #     'columns': ['value'],
-            #     'sql':'SELECT eventNanoTs,eventType,value FROM aClimateData WHERE sourceId="70-ee-50-02-d4-2c" AND eventType != "Temperature"',
-            #     'index_col':['eventNanoTs','eventType'],
-            #     'parse_dates':{'eventNanoTs':'ns'},
-            #     'cache':None
-            # },
-            # 'indoor2rest': {
-            #     'columns': ['value'],
-            #     'sql':'SELECT eventNanoTs,eventType,value FROM aClimateData WHERE sourceId="03-00-00-01-21-a2" AND eventType != "Temperature"',
-            #     'index_col':['eventNanoTs','eventType'],
-            #     'parse_dates':{'eventNanoTs':'ns'},
-            #     'cache':None
-            # },
-            # 'outdoorrain': {
-            #     'columns': ['value'],
-            #     'sql':'SELECT eventNanoTs,value FROM aClimateData WHERE sourceId="05-00-00-00-16-88" AND eventType="Rain"',
-            #     'index_col':['eventNanoTs'],
-            #     'parse_dates':{'eventNanoTs':'ns'},
-            #     'cache':None
-            },
-            'energywater': {
-                'columns': ['c1_delta','c1_cumul','c1_peak','c1_indirect','c2_delta','c2_cumul','c2_peak','c2_indirect','c3_delta','c3_cumul','c3_peak','c3_indirect','measures_count'],
-                'sql':'SELECT groupNanoTs as eventNanoTs,c1_delta,c1_cumul,c1_peak,c1_indirect,c2_delta,c2_cumul,c2_peak,c3_indirect,c3_delta,c3_cumul,c3_peak,c3_indirect,measures_count FROM aWaterEnergyStats',
-                'index_col':['eventNanoTs'],
-                'parse_dates':{'eventNanoTs':'ns'},
-                'cache':None
-            # },
-            # 'energyfloor': {
-            #     'columns': ['accessNumber','heatingEnergy','volume','temp1','temp2','power','flow'],
-            #     'sql':'SELECT recordNanoTs,accessNumber,heatingEnergy,volume,temp1,temp2,power,flow FROM aMbusMC302Record WHERE id="67285016"',
-            #     'index_col':['recordNanoTs'],
-            #     'parse_dates':{'recordNanoTs':'ns'},
-            #     'cache':None
-            # },
-            # 'energywoodboiler': {
-            #     'columns': ['accessNumber','heatingEnergy','volume','temp1','temp2','power','flow'],
-            #     'sql':'SELECT recordNanoTs,accessNumber,heatingEnergy,volume,temp1,temp2,power,flow FROM aMbusMC302Record WHERE id="67285015"',
-            #     'index_col':['recordNanoTs'],
-            #     'parse_dates':{'recordNanoTs':'ns'},
-            #     'cache':None
-            # },
-            # 'energywarmwater': {
-            #     'columns': ['accessNumber','heatingEnergy','volume','temp1','temp2','power','flow'],
-            #     'sql':'SELECT recordNanoTs,accessNumber,heatingEnergy,volume,temp1,temp2,power,flow FROM aMbusMC302Record WHERE id="67280331"',
-            #     'index_col':['recordNanoTs'],
-            #     'parse_dates':{'recordNanoTs':'ns'},
-            #     'cache':None
-            },
-            'energyelectricity': {
-                'columns': ['c1_use','c1_cumul','c1_peak','c2_use','c2_cumul','c2_peak','c3_use','c3_cumul','c3_peak','c4_use','c4_cumul','c4_peak','c5_use','c5_cumul','c5_peak','c6_use','c6_cumul','c6_peak','c7_use','c7_cumul','c7_peak','c8_use','c8_cumul','c8_peak','all_use','all_cumul','all_peak','measures_count'],
-                'sql':'SELECT groupNanoTs as eventNanoTs,c1_use,c1_cumul,c1_peak,c2_use,c2_cumul,c2_peak,c3_use,c3_cumul,c3_peak,c4_use,c4_cumul,c4_peak,c5_use,c5_cumul,c5_peak,c6_use,c6_cumul,c6_peak,c7_use,c7_cumul,c7_peak,c8_use,c8_cumul,c8_peak,all_use,all_cumul,all_peak,measures_count FROM aPowerStats',
-                'index_col':['eventNanoTs'],
-                'parse_dates':{'eventNanoTs':'ns'},
-                'cache':None
-            # },
-            # 'wholetable': {
-            #     'columns': ['value'],
-            #     'sql':'SELECT eventNanoTs,sourceId,eventType,value FROM aClimateData',
-            #     'index_col':['eventNanoTs','sourceId','eventType'],
-            #     'parse_dates':{'eventNanoTs':'ns'},
-            #     'cache':None
-            }
-        }
-        for name,val in self.dataCaches.items():
-            res = yield DBHelperMYSQL.initDataCache(self,params=val,name=name)
-            val['cache'] = res
+            # ({'device':'02-00-00-03-08-1c','datatype':'Temperature,Humidity','loctype':'outdoor','sourceType':'netatmo'})
+            # ({'device':'70-ee-50-02-d4-2c','datatype':'Temperature,Humidity,CO2,Pressure,Noise','loctype':'indoor','sourceType':'netatmo'})
+            # ({'device':'03-00-00-01-21-a2','datatype':'Temperature,Humidity,CO2','loctype':'indoor','sourceType':'netatmo'})
+            # ({'device':'05-00-00-00-16-88','datatype':'Rain','loctype':'outdoor','sourceType':'netatmo'})
 
-        _log.info('All caches ready in %.3fs' % (time.time()-starttime))
+            while len(_cacheupdstack):
+                c = _cacheupdstack.pop(0)
+                if c == 'all':
+                    _cacheupdstack = [] # dump rest of stack since 'all' caches are updated
+                    for name,val in self.dataCaches.items():
+                        res = yield DBHelperMYSQL.initDataCache(self,params=val,name=name)
+                        val['cache'] = res
+                else:
+                    if c in self.dataCaches:
+                        _log.info("Updating cache '%s'" % c)
+                        res = yield DBHelperMYSQL.initDataCache(self,params=self.dataCaches[c],name=c)
+                        self.dataCaches[c]['cache'] = res
+                    else:
+                        _log.warning('Invalid cache refresh requested : %s' % c)
+
+
+            _log.info('All caches ready in %.3fs' % (time.time()-starttime))
         if profile_mem:
             _log.info('Calculating mem usage')
             memory_usage('')
-        return res
-
+        return
 
     @run_on_executor(executor='dbexecutor')
     def initDataCache(self,params=None,name=''):
@@ -438,22 +468,36 @@ class DBHelperMYSQL(object):
             max_idle_connections=10,
             max_recycle_sec=3)
 
-    @gen.coroutine
-    def dbExecute(self,query,parseresp=None):
-        if not self.dbPool:
-            _log.debug('Connecting to db')
-            res = yield self.dbConnect()
-            _log.debug('Connected to db')
+    @run_on_executor(executor='dbexecutor')
+    def dbInsertDataFrame(self,df,tablename):
+        start = time.time()
 
-        res = yield DBHelperMYSQL._dbExecute(self,query,parseresp)
+        # engine = create_engine('mysql+mysqldb://aHouseDbUser:@localhost:3306/aHouseEnergy', echo=False, connect_args={'cursorclass': MySQLdb.cursors.SSCursor})
+        # conn = engine.connect().execution_options(stream_results=True)
+        engine = create_engine('mysql+mysqldb://aHouseDbUser:@localhost:3306/aHouseEnergy', echo=False)
+
+        try:
+            result = df.to_sql(tablename,engine,if_exists='append')
+        except Exception as e:
+            _log.warning('Error during database operation : %s' % str(e))
+            pass
+        #conn.close()
+        _log.info('Db insert ready in %.3fs , result : %s' % (time.time()-start,result))
+        return 
+
+    @gen.coroutine
+    def dbExecute(self,query,parseresp=None,returnrowcount=False):
+        if not self.dbPool:
+            _log.info('Db connection not ready, connecting to db')
+            res = yield self.dbConnect()
+            _log.info('Connected to db')
+
+        res = yield DBHelperMYSQL._dbExecute(self,query,parseresp,returnrowcount)
         return res
 
     @gen.coroutine
-    def _dbExecute(self,query,parseresp):
-        """Function to execute queries against a local sqlite database"""
-        _log.info('Executing SQL')
-        tzname = None
-        script = None
+    def _dbExecute(self,query,parseresp,returnrowcount):
+        _log.debug('Executing SQL')
         try:
             self.dbCursor = yield self.dbPool.execute(query)
 
@@ -467,113 +511,156 @@ class DBHelperMYSQL(object):
                     result = tmp.getvalue()
                     _log.debug('Db result CSV :\n%s' % result)
             else:
-                result = self.dbCursor.fetchall()
-                if result:
-                    _log.debug('DB result :\n%s' % result)
+                if returnrowcount: 
+                    result = self.dbCursor.rowcount
+                    if result:
+                        _log.debug('Db rowcount :\n%d' % result)
+                else:
+                    result = self.dbCursor.fetchall()
+                    if result:
+                        _log.debug('DB result :\n%s' % result)
+
 
         except Exception:
             raise
-        #dbCursor.close()
         return result
 
+class DBAggregator(object):
+    @gen.coroutine
+    def aggregateMC302():
 
+        url = 'http://abox.local:8888/data?q=mbus'
+        _log.info('Get timestamp of latest update...')
 
-class DBHelperSQLITE(object):
-    def __init__(self):
-        self.dbexecutor = ThreadPoolExecutor(1)
-        self.dbreadexecutor = ThreadPoolExecutor(1)
-        self.dbConn = None
-        self.dbCursor = None
-        self.dbReadConn = None
-        self.dbReadCursor = None
-        self.dataCaches = None
+        sql = 'select recordTimestamp from aMbusMC302Record order by recordNanoTs DESC LIMIT 1;\n'
+        _log.debug('SQL: \n%s' % sql)
+        result = None
+        try:
+            result = yield DBHelperMYSQL.dbExecute(_dbHelperMYSQL,sql,parseresp=None)
+        except Exception as e:
+            _log.warning('Error during database operation : %s' % str(e))
+            pass
 
+        urlsuffix = None if result[0] is None else '&mints=%s' % result[0]
 
+        url += urlsuffix
 
-    @run_on_executor(executor='dbexecutor')
-    def dbConnect(self):
-        _log.info('Setting up database connection')
-        self.dbConn = sqlite3.connect(dbFile,check_same_thread=True) 
-        self.dbCursor = self.dbConn.cursor()
-        self.dbCursor.execute('SELECT sqlite_version(),sqlite_source_id();')
-        ver = self.dbCursor.fetchone()
-        _log.info('Data connection opened. SQLite version %s %s' % (ver[0],ver[1])) 
-        return 
+        _log.info('Getting data url: %s' % url)
 
-    @run_on_executor(executor='dbreadexecutor')
-    def dbReadConnect(self):
-        _log.info('Setting up read-only database connection')
-        self.dbReadConn = sqlite3.connect(dbFile,check_same_thread=True) 
-        self.dbReadCursor = self.dbReadConn.cursor()
-        self.dbReadCursor.execute('SELECT sqlite_version(),sqlite_source_id();')
-        ver = self.dbReadCursor.fetchone()
-        _log.info('Data connection opened. SQLite version %s %s' % (ver[0],ver[1])) 
-        return 
+        http_request = HTTPRequest(url)   
+        http_client = AsyncHTTPClient()
+        try:
+            httpresponse = yield http_client.fetch(http_request)
+
+            d = pd.read_csv(httpresponse.buffer)
+            _log.info('HTTP Response : %s - %s, Got %d new rows' % (httpresponse.code,httpresponse.reason,len(d.index)))
+
+            # add 'recordNanoTs' and drop rowId 
+            d['recordNanoTs'] = pd.to_datetime(d['recordTimestamp'],format=df).astype(np.int64)
+            d.set_index('recordNanoTs',inplace=True)
+            d.drop('rowId',inplace=True,axis=1)
+
+            # write  DataFrame to DB
+            result = yield DBHelperMYSQL.dbInsertDataFrame(_dbHelperMYSQL,d,'aMbusMC302Record')
+
+            # aggregate waterEnergyStats
+            # find latest 'groupNanoTs' in aWaterEnergyStats        
+            sql = 'select groupNanoTs from aWaterEnergyStats order by groupNanoTs DESC LIMIT 1;\n'
+            _log.debug('SQL: \n%s' % sql)
+            result = None
+            result = yield DBHelperMYSQL.dbExecute(_dbHelperMYSQL,sql,parseresp=None)
+            gts = 0 if result[0] is None else '%s' % result[0]
+
+            with open(dbPath+'aggregateWaterEnergyStats.sql','r',encoding='utf-8') as sql_file:
+                sql = sql_file.read() 
+            
+            sql = sql.replace(';REPLACEWITHNANOSEC;',gts)
+            _log.debug('SQL: \n%s' % sql)
+            result = yield DBHelperMYSQL.dbExecute(_dbHelperMYSQL,sql,parseresp=None,returnrowcount=True)
+
+            _log.info('Aggregation of aWaterEnergyStats updated %s rows' % result)
+
+            result > 0 and _cacheupdstack.append('energyelectricity')
+            
+        except HTTPError as e:
+            _log.warning('HTTPError \'%s : %s\' when requesting MC302 data, skipping...' %  (e.code,e.message))
+            pass
+        except Exception as e:
+            # Other errors are possible, such as IOError.
+            _log.error("Error: " + str(e))
+            pass     
+        return
 
     @gen.coroutine
-    def dbExecute(self,query,parseresp=None,tzname=None,script=False):
-        if not self.dbConn:
-            _log.debug('Connecting to db')
-            res = yield self.dbConnect()
-            _log.debug('Connected to db')
+    def aggregatePower():
 
-        res = yield DBHelperSQLITE._dbExecute(self,query,parseresp,tzname,script)
-        return res
+        url = 'http://abox.local:8888/data?q=power'
+        _log.info('Get timestamp of latest update...')
 
-    @run_on_executor(executor='dbexecutor')
-    def _dbExecute(self,query,parseresp,tzname,script):
-        """Function to execute queries against a local sqlite database"""
-        _log.info('Executing SQL')
+        sql = 'select ts from aPower order by eventNanoTs DESC LIMIT 1;\n'
+        _log.debug('SQL: \n%s' % sql)
+        result = None
         try:
-            if tzname is not None:
-                _log.info('Doing timzone conversion to timezone \'%s\'' % tzname)
-                # utilizing db localtime function by setting timezone to requested tz, not threadsafe!!
-                saved_tz = get_localzone().zone # save current timezone so it can be reset after query
-                os.environ['TZ'] = tzname       # set environment variable to requested timezone
-                time.tzset()                    # update timezone from env
-                if script:
-                    self.dbCursor.executescript(query)
-                else:
-                    self.dbCursor.execute(query)
-                os.environ['TZ'] = saved_tz     # reset env to saved timezone
-                time.tzset()                    # update timezone from env
-            else:
-                _log.info('No timezone conversion')
-                if script:
-                    self.dbCursor.executescript(query)
-                else:
-                    self.dbCursor.execute(query)
+            result = yield DBHelperMYSQL.dbExecute(_dbHelperMYSQL,sql,parseresp=None)
+        except Exception as e:
+            _log.warning('Error during database operation : %s' % str(e))
+            pass
 
+        urlsuffix = None if result[0] is None else '&mints=%s' % tornado.escape.url_escape('%s' % result[0])
+        
+        url += urlsuffix
+
+        _log.info('Getting data url: %s' % url)
+
+        http_request = HTTPRequest(url)   
+        http_client = AsyncHTTPClient()
+        try:
+            httpresponse = yield http_client.fetch(http_request)
+
+            d = pd.read_csv(httpresponse.buffer)
+            _log.info('HTTP Response : %s - %s, Got %d new rows' % (httpresponse.code,httpresponse.reason,len(d.index)))
+            dateformat = '%Y-%m-%d %H:%M:%S.%f'
+            # add 'recordNanoTs' and drop rowId 
+            d['eventNanoTs'] = pd.to_datetime(d['ts'],format=dateformat).astype(np.int64)
+            d.set_index('eventNanoTs',inplace=True)
+            d.drop('id',inplace=True,axis=1)
+
+            # write  DataFrame to DB
+            result = yield DBHelperMYSQL.dbInsertDataFrame(_dbHelperMYSQL,d,'aPower')
+
+            # aggregate aPowerStats
+            # find latest 'groupNanoTs' in aPowerStats        
+            sql = 'select groupNanoTs from aPowerStats order by groupNanoTs DESC LIMIT 1;\n'
+            _log.debug('SQL: \n%s' % sql)
             result = None
-            if parseresp is not None:
-                if parseresp == 'CSV':
-                    tmp = StringIO()
-                    csv_writer = csv.writer(tmp, quoting=csv.QUOTE_NONNUMERIC)
-                    csv_writer.writerow([i[0] for i in self.dbCursor.description]) # write headers
-                    csv_writer.writerows(self.dbCursor)
-                    result = tmp.getvalue()
-                    _log.debug('Db result CSV :\n%s' % result)
-            else:
-                result = self.dbCursor.fetchall()
-                _log.debug('DB result :\n%s' % result)
+            result = yield DBHelperMYSQL.dbExecute(_dbHelperMYSQL,sql,parseresp=None)
+            gts = 0 if result[0] is None else '%s' % result[0]
 
-            self.dbConn.commit()
-        except Exception:
-            raise
-        #dbCursor.close()
-        return result
+            with open(dbPath+'aggregatePowerStats.sql','r',encoding='utf-8') as sql_file:
+                sql = sql_file.read() 
+            
+            sql = sql.replace(';REPLACEWITHNANOSEC;',gts)
+            _log.debug('SQL: \n%s' % sql)
+            result = yield DBHelperMYSQL.dbExecute(_dbHelperMYSQL,sql,parseresp=None,returnrowcount=True)
 
+            _log.info('Aggregation of aPowerStats updated %s rows' % result)
+
+            result > 0 and _cacheupdstack.append('energyelectricity')
+            
+        except HTTPError as e:
+            _log.warning('HTTPError \'%s : %s\' when requesting Power data, skipping...' %  (e.code,e.message))
+            pass
+        except Exception as e:
+            # Other errors are possible, such as IOError.
+            _log.error("Error: " + str(e))
+            pass     
+        return
 
 
 class TaskRunner(object):
     def __init__(self, loop):
         self.executor = ThreadPoolExecutor(4)
-        self.loop = loop
         self.arguments = {}
-        self.bgDbConn = sqlite3.connect(dbFile)
-        self.bgDbCursor = self.bgDbConn.cursor()
-        loop.add_callback(self.bgloop())
-
 
     def get_argument(self, name, default, strip=True):
         return self.arguments[name] if name in  self.arguments else default
@@ -583,53 +670,34 @@ class TaskRunner(object):
         return 
 
     @gen.coroutine
-    def loadCachesCallback(*args, **kwargs):
-        _log.info('Loading of caches done')
-
+    def bgheartbeat():
+        out = StringIO() 
+        _scheduler.print_jobs(out=out)
+        _log.info('%s' % out.getvalue())
 
     @gen.coroutine
-    def bgloop(self):
-        global dbAggregation_runonce,dbAggregation_running,dbCache_update
-        # try:
-        #     yield gen.sleep(1) 
-        # except Exception as e:
-        #     print(str(e))
-        #     pass
-
+    def setupbg(self):
         
-        t0 = datetime.now()
-        sleep = divmod(t0.time().second,bgloop_syncto)[0]*bgloop_syncto+bgloop_syncto-t0.time().second - (t0.time().microsecond/1000000) # next even 60sec
-        yield gen.sleep(sleep)  # first instantiation of gen.sleep logs "TypeError: 'Future' object is not callable" -exception, doesn't seems cause any problems but haven't found a way to catch this nicely
+        _cacheupdstack.append('all')
+        offset = 30.0 # offset x seconds
+        firstrun = datetime.fromtimestamp(divmod(datetime.now().timestamp(),bgloop_syncto)[0]*bgloop_syncto+bgloop_syncto+offset)
+        _log.info('Background jobs first run at %s' % firstrun)
 
-        
-        while True:
-            
-            _log.info('Background loop starting..')
-            t0 = datetime.now()
-            sleep = divmod(t0.time().second,bgloop)[0]*bgloop+bgloop-t0.time().second - (t0.time().microsecond/1000000) # next even 10sec
-            nxt = gen.sleep(sleep)   # Start the clock.
-            if dbAggregation_running:
-                if dbAggregation_runonce:
-                    dbAggregation_running = False
-                #yield self.aggregatePowerDataByMinute()  # Run while the clock is ticking.
-                if (netatmo_access_token is None or netatmo_access_expires is None or netatmo_access_expires-time.time() < 600):
-                    _log.info('Doing authentication to Netatmo ')
-                    token = yield self.authenticateNetatmo()
-                _log.info('Retrieving and storing tempdata ')
-                #yield self.retrieveAndStoreNetatmoData(netatmo_access_token) 
-                yield self.retrieveAndStoreAllTypesNetatmoData(netatmo_access_token)
-                
-                if dbCache_update:
-                    res = DBHelperMYSQL.prepareDataCache(_dbHelperMYSQL,callback=self.loadCachesCallback) # fire and forget(for now) loading of caches
-                    dbCache_update = False
-        
-            _log.info('Background tasks done in %.3fs, sleeping... ' % ((datetime.now()-t0).total_seconds()))
-            yield nxt             # Wait for the timer to run out.
+        _scheduler.add_job(TaskRunner.bgheartbeat, 'interval', seconds=60,next_run_time=firstrun)
+        _scheduler.add_job(DBAggregator.aggregateMC302, 'interval', seconds=60,next_run_time=firstrun)
+        _scheduler.add_job(DBAggregator.aggregatePower, 'interval', seconds=60,next_run_time=firstrun)
+        _scheduler.add_job(NetatmoHelper.retrieveAndStoreAllTypesNetatmoData, 'interval',args=[self],seconds=300,next_run_time=firstrun)
+        _scheduler.add_job(DBHelperMYSQL.refreshDataCache, 'interval',args=[_dbHelperMYSQL],seconds=15)   
 
+        out = StringIO() 
+        _scheduler.print_jobs(out=out)
+        _log.info('%s' % out.getvalue())
+        return
 
+class NetatmoHelper(object):
     @gen.coroutine
     def dbInsertClimateEvents(self,data,args):
-        _log.info('Starting db insert...')
+        _log.debug('Starting db insert...')
 
         sqlbuf = StringIO()
         _log.debug(data)
@@ -651,17 +719,17 @@ class TaskRunner(object):
         _log.debug('SQL: \n%s' % sqlbuf.getvalue())
         try:
             #res = yield DBHelperSQLITE.dbExecute(_dbHelperSQLITE,sqlbuf.getvalue(),parseresp=None,tzname=None,script=True)
-            res = yield DBHelperMYSQL.dbExecute(_dbHelperMYSQL,sqlbuf.getvalue(),parseresp=None)
+            res = yield DBHelperMYSQL.dbExecute(_dbHelperMYSQL,sqlbuf.getvalue(),parseresp=None,returnrowcount=True)
+            res > 0 and _cacheupdstack.append('all')
         except Exception as e:
             _log.warning('Error during database inserts : %s' % str(e))
             raise
-        _log.info('Finishing db insert...')
+        _log.debug('Finishing db insert...')
         return
-
 
     @gen.coroutine
     def dbGetClimateEventLastUpdate(self,args):
-        _log.info('Get timestamp of latest update...')
+        _log.debug('Get timestamp of latest update...')
 
         # Get timestamp of oldest entry of the most recent entries of each type (MYSQL) 
         # SELECT MIN(tmp.ts) AS minofmaxes FROM 
@@ -696,7 +764,10 @@ class TaskRunner(object):
         return ts
 
     @gen.coroutine
-    def retrieveAndStoreAllTypesNetatmoData(self,token):
+    def retrieveAndStoreAllTypesNetatmoData(self):
+
+        token = yield NetatmoHelper.authenticateNetatmo(self)
+
         argstack = []
         # 70-ee-50-02-d4-2c   Inne    netatmoreq_template_70-ee-50-02-d4-2c.json
         # 02-00-00-03-08-1c   Ute     netatmoreq_template_02-00-00-03-08-1c.json
@@ -713,7 +784,7 @@ class TaskRunner(object):
             self.set_argument('datatype',args['datatype'])
             self.set_argument('loctype',args['loctype'])
             self.set_argument('sourceType',args['sourceType'])
-            res = yield self.retrieveAndStoreNetatmoData(token)
+            res = yield NetatmoHelper.retrieveAndStoreNetatmoData(self,token)
 
     @gen.coroutine
     def retrieveAndStoreNetatmoData(self,token):
@@ -727,15 +798,15 @@ class TaskRunner(object):
         args['loctype']=self.arguments['loctype'] if self.arguments['loctype'] is not None else 'outdoor'
         args['sourceType']=self.arguments['sourceType'] if self.arguments['sourceType'] is not None else 'netatmo'
 
-        _log.info('Processing args : %s' % args)
-        mints = yield self.dbGetClimateEventLastUpdate(args)
+        _log.debug('Processing args : %s' % args)
+        mints = yield NetatmoHelper.dbGetClimateEventLastUpdate(self,args)
 
         t1 = int(mints)+1 if mints > 0 else (datetime.strptime(min_s, df) - dt0).total_seconds()
         args['begin']=self.arguments['begin']=t1
 
         args['end']=self.arguments['end']=int(now)     # get all data up until now (netatmo limits to 1024 entries per response)
 
-        jsondata = yield self.getNetatmoMeasureData(token)
+        jsondata = yield NetatmoHelper.getNetatmoMeasureData(self,token)
         ##   {"body":{"1397154014":[12.7,68],"1397154276":[15.3,35]
         data = tornado.escape.json_decode(jsondata)
         _log.debug('Response data : %s' % jsondata)
@@ -743,7 +814,7 @@ class TaskRunner(object):
             l = len(data['body'])
             _log.info('Got data : %d entries : %s - %s' % (l,datetime.fromtimestamp(float(list(data['body'].keys())[0])).strftime(df),datetime.fromtimestamp(float(list(data['body'].keys())[l-1])).strftime(df)))
             _log.debug('Calling DB update...')
-            res = yield self.dbInsertClimateEvents(data['body'],args)
+            res = yield NetatmoHelper.dbInsertClimateEvents(self,data['body'],args)
             _log.debug('After data update...')
         else:
             _log.info('No new data received')
@@ -787,76 +858,81 @@ class TaskRunner(object):
         global netatmo_access_expires
 
         token_minimi_life = 600     # minimi delta in seconds
-        refresh_token = None
-        if os.path.isfile(netatmo_token_file):
-            token = None
-            with open(netatmo_token_file, 'r', encoding='utf-8') as token_file:
-                token = json.loads(token_file.read())
-            if token is not None:
-                delta = token['created']+token['expires_in']-time.time()
-                _log.info('Token valid for %d seconds still' % delta )
-                if delta > token_minimi_life:
-                    netatmo_access_token = token['access_token']
-                    netatmo_access_expires = token['created'] + token['expires_in']
-                    return netatmo_access_token
-                elif delta > 60:
-                    # trying refresh if more than 1minute left before token expiration
-                    _log.info('Trying to refresh token')
-                    refresh_token = token['refresh_token'] 
 
-        data = None
-        with open(netatmo_auth_file,'r', encoding='utf-8') as data_file:
-            data = json.loads(data_file.read())             
-        if data is not None:
-            # z = {**x, **y} , merge two dictionaries, new in Python 3.5-> 
-            if refresh_token is None:
-                b = data['common_body'].copy()
-                b.update(data['auth_body'])
-                #b = {**data['common_body'], **data['auth_body']}
-            else:
-                b = data['refresh_body'].copy()
-                b.update(data['common_body'])
-                #b = {**data['refresh_body'], **data['common_body']}
-                b['refresh_token']=refresh_token
-                _log.info('Requesting refresh with refresh_token : %s'% b['refresh_token'])
-            body = '&'.join(['%s=%s' % (key, value) for (key, value) in b.items()])
-            _log.debug('HTTP Request Body \'%s\'' % body)
-            http_request = HTTPRequest(
-                url=data['auth_url'],   # same for both auth and refresh 
-                method='POST',
-                follow_redirects=True,
-                headers=data['headers'],
-                body=body
-                )
-            http_client = AsyncHTTPClient()
-            try:
-                httpresponse = yield http_client.fetch(http_request)
-                responseDict = json.loads(tornado.escape.to_basestring(httpresponse.body))
-                
-                _log.info('New access token : %s' % responseDict['access_token'])
-                _log.info('Expires in : %d' % responseDict['expires_in'])
-                # Add creation time (in seconds since Epoch)
-                responseDict['created']=time.time()
-                
-                netatmo_access_token=responseDict['access_token']
-                netatmo_access_expires=responseDict['created']+responseDict['expires_in']
+        if (netatmo_access_token is not None and netatmo_access_expires is not None and netatmo_access_expires-time.time() < token_minimi_life):
+            return netatmo_access_token
+        else:
+            _log.info('Doing authentication to Netatmo ')
 
-                with open(netatmo_token_file, 'w', encoding='utf-8') as token_file:
-                    token_file.write(tornado.escape.json_encode(responseDict))
-                
-            except HTTPError as e:
-                _log.warning('HTTPError \'%s : %s\' when requesting Netatmo authentication token, skipping...' %  (e.code,e.message))
-                pass
-            except Exception as e:
-                # Other errors are possible, such as IOError.
-                _log.error("Error: " + str(e))       
+            refresh_token = None
+            if os.path.isfile(netatmo_token_file):
+                token = None
+                with open(netatmo_token_file, 'r', encoding='utf-8') as token_file:
+                    token = json.loads(token_file.read())
+                if token is not None:
+                    delta = token['created']+token['expires_in']-time.time()
+                    _log.info('Token valid for %d seconds still' % delta )
+                    if delta > token_minimi_life:
+                        netatmo_access_token = token['access_token']
+                        netatmo_access_expires = token['created'] + token['expires_in']
+                        return netatmo_access_token
+                    elif delta > 60:
+                        # trying refresh if more than 1minute left before token expiration
+                        _log.info('Trying to refresh token')
+                        refresh_token = token['refresh_token'] 
 
-        return netatmo_access_token
+            data = None
+            with open(netatmo_auth_file,'r', encoding='utf-8') as data_file:
+                data = json.loads(data_file.read())             
+            if data is not None:
+                # z = {**x, **y} , merge two dictionaries, new in Python 3.5-> 
+                if refresh_token is None:
+                    b = data['common_body'].copy()
+                    b.update(data['auth_body'])
+                    #b = {**data['common_body'], **data['auth_body']}
+                else:
+                    b = data['refresh_body'].copy()
+                    b.update(data['common_body'])
+                    #b = {**data['refresh_body'], **data['common_body']}
+                    b['refresh_token']=refresh_token
+                    _log.info('Requesting refresh with refresh_token : %s'% b['refresh_token'])
+                body = '&'.join(['%s=%s' % (key, value) for (key, value) in b.items()])
+                _log.debug('HTTP Request Body \'%s\'' % body)
+                http_request = HTTPRequest(
+                    url=data['auth_url'],   # same for both auth and refresh 
+                    method='POST',
+                    follow_redirects=True,
+                    headers=data['headers'],
+                    body=body
+                    )
+                http_client = AsyncHTTPClient()
+                try:
+                    httpresponse = yield http_client.fetch(http_request)
+                    responseDict = json.loads(tornado.escape.to_basestring(httpresponse.body))
+                    
+                    _log.info('New access token : %s' % responseDict['access_token'])
+                    _log.info('Expires in : %d' % responseDict['expires_in'])
+                    # Add creation time (in seconds since Epoch)
+                    responseDict['created']=time.time()
+                    
+                    netatmo_access_token=responseDict['access_token']
+                    netatmo_access_expires=responseDict['created']+responseDict['expires_in']
+
+                    with open(netatmo_token_file, 'w', encoding='utf-8') as token_file:
+                        token_file.write(tornado.escape.json_encode(responseDict))
+                    
+                except HTTPError as e:
+                    _log.warning('HTTPError \'%s : %s\' when requesting Netatmo authentication token, skipping...' %  (e.code,e.message))
+                    pass
+                except Exception as e:
+                    # Other errors are possible, such as IOError.
+                    _log.error("Error: " + str(e))       
+            return netatmo_access_token
 
     @gen.coroutine
     def getNetatmoMeasureData(self,token):
 
-        _log.info('Getting measurements data.....')
+        _log.debug('Getting measurements data.....')
         # 70-ee-50-02-d4-2c   Inne    netatmoreq_template_70-ee-50-02-d4-2c.json
         # 02-00-00-03-08-1c   Ute     netatmoreq_template_02-00-00-03-08-1c.json
         # 03-00-00-01-21-a2   Bygge   netatmoreq_template_03-00-00-01-21-a2.json
@@ -889,7 +965,7 @@ class TaskRunner(object):
                 req['body']['scale'] = self.get_argument('scale', req['body']['scale'])
                 req['body']['type'] = self.get_argument('datatype', req['body']['type'])
 
-                _log.info(req)
+                _log.debug(req)
                 body = '&'.join(['%s=%s' % (k, v) for (k, v) in req['body'].items()])
                 _log.debug('HTTP Request Body \'%s\'' % body)
                 http_request = HTTPRequest(
@@ -920,7 +996,6 @@ class TaskRunner(object):
 
         return None
 
-
 class NetatmoHandler(web.RequestHandler):
     executor = ThreadPoolExecutor(max_workers=1)
     def set_extra_headers(self, path):
@@ -937,7 +1012,7 @@ class NetatmoHandler(web.RequestHandler):
 
         if (netatmo_access_token is None or netatmo_access_expires is None or netatmo_access_expires-time.time() < 600):
             _log.info('Starting authentication...')
-            yield TaskRunner.authenticateNetatmo(self)
+            yield NetatmoHelper.authenticateNetatmo(self)
 
         if netatmo_access_token is not None:
             _log.info(netatmo_access_expires)
@@ -955,16 +1030,15 @@ class NetatmoHandler(web.RequestHandler):
             else:
                 _log.info('Running \'%s\'-query' % q)
                 if (q == 'dash'):
-                    response = yield TaskRunner.getNetatmoDashboardData(self,netatmo_access_token)
+                    response = yield NetatmoHelper.getNetatmoDashboardData(self,netatmo_access_token)
                 elif (q == 'getmeasure'):
-                    response = yield TaskRunner.getNetatmoMeasureData(self,netatmo_access_token)
+                    response = yield NetatmoHelper.getNetatmoMeasureData(self,netatmo_access_token)
 
                 if response is not None:
                     self.write('%s' % response)
 
 
         self.finish()
-
 
 class ClimaDataHandler(web.RequestHandler):
 
@@ -996,14 +1070,15 @@ class ClimaDataHandler(web.RequestHandler):
                 d = _dbHelperMYSQL.dataCaches[cachename]['cache'].tz_localize('UTC').tz_convert(tzname).resample('D',how=['min','max','mean'])
                 d.index.names = ['ts']
                 d.columns = ['min','max','avg']
-                resp = d.to_csv(header=True,date_format='%Y%m%d',quoting=csv.QUOTE_NONNUMERIC)
+                resp = d.to_csv(header=True,date_format='%Y-%m-%d',quoting=csv.QUOTE_NONNUMERIC)
             else:       # failsafe read from db, slow but working
                 _log.info('Fallback to db read')
                 sqlbuf = StringIO()
                 sqlbuf.write('SELECT DATE(CONVERT_TZ(FROM_UNIXTIME(eventNanoTs/1e9),\'UTC\',\'Europe/Helsinki\')) AS ts,\n')
                 sqlbuf.write('    MIN(value) AS min,MAX(value) AS max,AVG(value) AS avg\n') 
                 sqlbuf.write('    FROM aClimateData\n')
-                sqlbuf.write('    WHERE eventType = \'%s\'\n' % args['datatypes'][0])
+                sqlbuf.write('    WHERE sourceId = \'%s\'\n' % args['device'])
+                sqlbuf.write('    AND eventType = \'%s\'\n' % args['datatypes'][0])
                 sqlbuf.write('    GROUP BY ts;\n')
                 query = sqlbuf.getvalue()
 
@@ -1171,6 +1246,100 @@ class EnergyDataHandler(web.RequestHandler):
                 _log.warning('Data caches not ready or unknown request for request %s' % self.request.uri)
                 resp = "Data not available"
 
+        elif (q == 'combined'):
+            combo = self.get_argument('combo','indirect0')
+            readyCaches = []
+            if combo == 'indirect0':  # "direct" = floorheating c1(water) + ventilation c4(electricity) + floorbathroom c3(electricity) + domestic water c3(water)
+                args_el = {
+                    'datatypes' : 'c4_use,c3_use'.split(','), 
+                    'device' : 'electricity'
+                }
+                args_wat = {
+                    'datatypes' : 'c1_delta,c3_delta'.split(','), 
+                    'device' : 'water'
+                }
+                readyCaches = yield DBHelperMYSQL.haveCaches(_dbHelperMYSQL,args_el)
+                if readyCaches and len(readyCaches) > 0 :
+                    tmp = yield DBHelperMYSQL.haveCaches(_dbHelperMYSQL,args_wat)
+                    if tmp and len(tmp) > 0:
+                        readyCaches.update(tmp)
+                    else:
+                        readyCaches = None
+                        _log.warning('Water energy cache not available')
+                else:
+                    _log.warning('Electric energy cache not available')
+                datatypes = ['c1_delta','c4_use','c3_use','c3_delta']
+
+            elif combo == 'indirect1': # "indirect" = boiler c6+c7+c8(electricity) + woodboiler c2(water) 
+                args_el = {
+                    'datatypes' : 'c6_use,c7_use,c8_use'.split(','), 
+                    'device' : 'electricity'
+                }
+                args_wat = {
+                    'datatypes' : 'c2_delta'.split(','), 
+                    'device' : 'water'
+                }
+                readyCaches = yield DBHelperMYSQL.haveCaches(_dbHelperMYSQL,args_el)
+                if readyCaches and len(readyCaches) > 0 :
+                    tmp = yield DBHelperMYSQL.haveCaches(_dbHelperMYSQL,args_wat)
+                    if tmp and len(tmp) > 0 :
+                        readyCaches.update(tmp)
+                    else:
+                        readyCaches = None
+                        _log.warning('Water energy cache not available')
+                else:
+                    _log.warning('Electric energy cache not available')
+
+                datatypes = ['c6_use','c7_use','c8_use','c2_delta']
+            else:
+                _log.info('Invalid combination requested')
+
+            args = {
+                'mindate' : self.get_argument('mindate',None), 
+                'maxdate' : self.get_argument('maxdate',None), 
+                'tzname' : self.get_argument('tz','UTC'),
+                'aggrto' : self.get_argument('aggrto',None),
+                'aggrhow' : self.get_argument('aggrhow','sum'),
+                'aggrlabel' : self.get_argument('aggrlabel','left')
+            }
+            args = yield parseRequestDates(args)
+
+            if readyCaches and len(readyCaches) > 0 :
+                _log.info('Reading from data caches')
+
+                d = None
+                for datatype in datatypes : 
+                    cachename = readyCaches[datatype]               
+                    # slice out interesting part (mints to maxts) from cache = pd.DataFrame
+                    # need to explicitly set sortlevel to 'eventNanoTs' for multi-leveled indexed
+                    tmp_df = _dbHelperMYSQL.dataCaches[cachename]['cache'][args['mints'].tz_convert('UTC'):args['maxts'].tz_convert('UTC')]
+                    if d is None:
+                        d = tmp_df[[datatype]]  # selecting single column as new DataFrame, double brackets needed otherwise d becomes a Series and not a DataFrame
+                    else:
+                        d = pd.merge(d,tmp_df[[datatype]],left_index=True,right_index=True,how='outer')
+
+                # Should have only one index left (eventTimestamp), rename 
+                d.index.names = ['ts']
+                d.columns = datatypes
+
+                if combo == 'indirect1': # sum c6,c7,c8 (3-phase) to c678_use
+                    d['c678_use'] = d[['c6_use','c7_use','c8_use']].sum(axis=1,numeric_only=True)
+                    d.drop(['c6_use','c7_use','c8_use'],axis=1,inplace=True)  # remove c6-c8
+                    d = d.ix[:,['c678_use','c2_delta']] # switch places c678 first, c2_delta second column
+
+                # resample to requested aggregation,same aggregation rule applied to all columns, aggregation done in tz
+                if args['aggrto'] and d.size > 0:
+                    if args['tzname'] == 'UTC':
+                        d = d.resample(args['aggrto'],how=args['aggrhow'],label=args['aggrlabel'])
+                    else: 
+                        d = d.tz_localize('UTC').tz_convert(args['tzname']).resample(args['aggrto'],how=args['aggrhow'],label=args['aggrlabel']).tz_convert('UTC')
+
+                resp = d.to_csv(header=True,date_format=df,quoting=csv.QUOTE_NONNUMERIC)
+
+            else:
+                _log.warning('Data caches not ready or unknown request for request %s' % self.request.uri)
+                resp = "Data not available"
+
         else:
             _log.info('Invalid query')
 
@@ -1178,12 +1347,11 @@ class EnergyDataHandler(web.RequestHandler):
         _log.info('Request done in %.3fs' % (time.time()-t0))
         self.finish()
 
-
 class BackgroundTaskHandler(web.RequestHandler):
 
     @gen.coroutine
     def get(self):
-        global dbAggregation_running,bgloop
+        global dbAggregation_running,bgloop,dbCache_update
 
         turn = self.get_argument('turn',None)
         if (turn == 'on'):
@@ -1208,11 +1376,20 @@ class BackgroundTaskHandler(web.RequestHandler):
             bgloop = float(bgl)
 
         cache = self.get_argument('cache',None)
-        if (turn == 'update'):
-            dbCache_update = True
-            _log.info('Triggered cache update for next bg loop : %s' % dbCache_update)
+        if cache and len(cache) > 0:
+            _cacheupdstack.append(cache)
+            _log.info('Triggered cache update for next bg loop : %s' % cache)
 
         _log.info('Effective BG parameters:  AggregationRunning : %s, Log Level : %s BGloop : %f seconds' % (dbAggregation_running,(dbAggregation_running,logging.getLevelName(_log.getEffectiveLevel())),bgloop))
+
+        aggr = self.get_argument('aggr',None)
+        if aggr is not None:
+            if (aggr == 'mbus'):
+                result = yield DBAggregator.aggregateMC302()
+            elif (aggr == 'power'):
+                result = yield DBAggregator.aggregatePower()
+            else:
+                _log.info('Bad aggr request : %s' % aggr)
 
         self.write('<html><body><div>BG LOOP RUNNING : %s</div><div>LOG_LEVEL : %s</div></body></html>' % (dbAggregation_running,logging.getLevelName(_log.getEffectiveLevel())))
         self.finish()
@@ -1249,15 +1426,16 @@ if __name__ == "__main__":
     _log.info('Setting log-level : %s',logging.getLevelName(LOG_LEVEL))
     _log.setLevel(LOG_LEVEL)   # 50 critical, 40 error, 30 warning, 20 info, 10 debug
 
-    _setupsql() # Prepare sqls
+    setupsql() # Prepare sqls
     # Setup the server
     application.listen(PORT)
 
     _dbHelperMYSQL = DBHelperMYSQL()
-    _dbHelperSQLITE = DBHelperSQLITE()
-
+    _scheduler = TornadoScheduler()
+    _scheduler.start()
     ioloop = IOLoop.instance()
 
     bgtask = TaskRunner(ioloop)
+    TaskRunner.setupbg(bgtask)
 
     ioloop.start()

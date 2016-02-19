@@ -28,7 +28,7 @@ define([
     // Requesting data (asynch) 
 //    var parseDate = d3.time.format("%d-%m-%yT%H:%M:%S").parse;
     var parseDate = d3.time.format("%d-%m-%y").parse;
-    var parseDateYmd = d3.time.format("%Y%m%d").parse;
+    var parseDateYmd = d3.time.format("%Y-%m-%d").parse;
     var parseTimestamp = d3.time.format("%Y/%m/%d %H:%M:%S").parse;  //  e.g. 2015/01/01 00:25:29
     var parseTimestamp2 = d3.time.format("%Y-%m-%d %H:%M:%S").parse;  //  e.g. 2015/01/01 00:25:29
     var parseTimestampPower = d3.time.format("%Y-%m-%d %H:%M:%S.%L").parse;
@@ -61,6 +61,15 @@ define([
         ,{ id : 5, min_H : 3360, max_H : null, extent_H : 3060, period_min : 30 }
     ];
 
+    var energyDataMap = {
+        'c1_delta' : 'Floor heat',
+        'c2_delta' : 'Wood boiler',
+        'c3_delta' : 'Hot water',
+        'c3_use' : 'Floor heat (bath)',
+        'c4_use' : 'Ventilation',
+        'c678_use' : 'Power boiler'
+    }
+
     // Prepare spinner
     var spinopts = {
       lines: 17, // The number of lines to draw
@@ -78,14 +87,7 @@ define([
     var spintarget = document.getElementById('chart'); // div.chart surrounding the main chart, width = 100%
     var spinner = new Spinner(spinopts).spin(spintarget);
 
-    var dsv = d3.dsv(";", "text/plain");
-    //Timestamp;ts;value;Humidity
-//    var csv = d3.csv();
-    //"ts","circuit9_cumul","circuit10_cumul","circuit11_cumul","circuit12_cumul","circuit13_cumul","circuit14_cumul","circuit15_cumul","circuit16_cumul"
-
     var preload_q = queue() // no limit to parallellism
-//        .defer(dsv, "data/tempdata/tempoutside2015_average.csv", function(d) { return { date : parseDate(d.ts), temp_avg : +d.value , temp_min : +d.temp_min, temp_max : +d.temp_max, hum_avg : +d.hum_avg}; })
-//      http://localhost:8888/clima?q=climaDaily&tz=Europe/Helsinki&datatype=Humidity
         .defer(d3.csv, "/clima?q=climaDaily&tz=Europe/Helsinki&datatype=Temperature", function(d) {
             return { 
                 // d.ts = '20160106'
@@ -94,56 +96,19 @@ define([
                 temp_min : +d.min, 
                 temp_max : +d.max
             };
-        })
-/*        .defer(d3.csv, "data/powerDaily.csv", function(d) { 
-            var ts = parseTimestampPower(d.ts.substring(0,d.ts.length-3)); // truncate microseconds from timestamp since JavaScript doesn't handle it well
-            return { 
-                date : new Date(ts.getFullYear(),ts.getMonth(),ts.getDate()), 
-                sampleTimestamp : ts, 
-                c1 : +d.circuit9_cumul,
-                c2 : +d.circuit10_cumul,
-                c3 : +d.circuit11_cumul,
-                c4 : +d.circuit12_cumul,
-                c5 : +d.circuit13_cumul,
-                c6 : +d.circuit14_cumul,
-                c7 : +d.circuit15_cumul,
-                c8 : +d.circuit16_cumul
-            }; 
-        })
-*/        
-/*        .defer(d3.csv, "/power?q=powerstats", function(d) {
-            return { 
-                date : parseTimestamp2(d.ts), 
-                c1_use : +d.c1_use, c1_cumul : +d.c1_cumul, c1_peak : +d.c1_peak,
-                c2_use : +d.c2_use, c2_cumul : +d.c2_cumul, c2_peak : +d.c2_peak,
-                c3_use : +d.c3_use, c3_cumul : +d.c3_cumul, c3_peak : +d.c3_peak,
-                c4_use : +d.c4_use, c4_cumul : +d.c4_cumul, c4_peak : +d.c4_peak,
-                c5_use : +d.c5_use, c5_cumul : +d.c5_cumul, c5_peak : +d.c5_peak,
-                c6_use : +d.c6_use, c6_cumul : +d.c6_cumul, c6_peak : +d.c6_peak,
-                c7_use : +d.c7_use, c7_cumul : +d.c7_cumul, c7_peak : +d.c7_peak,
-                c8_use : +d.c8_use, c8_cumul : +d.c8_cumul, c8_peak : +d.c8_peak,
-                all_use : +d.all_use, all_cumul : +d.all_cumul, all_peak : +d.all_peak,
-                rowid : d.id,ts : d.ts
-            }; 
-
-        })
-*/        ; 
-        
-
-        //.defer(dsv, "utetemp/utetemp20150101.csv", function(d) { return { date : parseTimestamp(d.ts), temp : +d.value , hum : +d.Humidity}; });
-        //.defer(dsv, "utetemp/utetemp20150102.csv", function(d) { return { date : parseTimestamp(d.ts), temp : +d.value , hum : +d.Humidity}; });
-
+        }); 
   
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // The primary chart
     // Set up the drawing area
     
     console.log(d3.select('#chart').style('width'));
-    var margin = {top: 20, right: 35, bottom: 30, left: 35},
-        width = parseInt(d3.select('#chart').style('width'), 10)-200,
+    var margin = {top: 20, right: 35, bottom: 20, left: 35},
+        width = parseInt(d3.select('#chart').style('width'), 10)-100,
         width = width - margin.left - margin.right,
         height = 500 - margin.top - margin.bottom,
-        upper_height = 200;
+        detail_height = 300,
+        legend_height = 30;
 
 
     var plotChart = d3.select('#chart').classed('chart', true)
@@ -168,14 +133,11 @@ define([
     var xScale = d3.time.scale(),
         yScale = d3.scale.linear(),
         yScalePower = d3.scale.linear();
-        //yScalePower = d3.scale.log();   // log scale
 
     // Set scale ranges
     xScale.range([0, width]);
-//    yScale.range([height, 0]);
-    yScale.range([height-upper_height, 0]);
-//    yScalePower.range([height, 0]);
-    yScalePower.range([height, height-upper_height]);
+    yScale.range([height-detail_height, 0]);
+    yScalePower.range([height-legend_height, height-detail_height]);
 
     // Scale domain set later based on data
 
@@ -219,13 +181,13 @@ define([
         .xScale(xScale)
         .yScale(yScalePower)
         .yAlign('left')
-        .colors(['#5d8dcd','#7cacdd','#99cbf0','#bfdfea','#d5ddd2','#8894a4','#6a7690']); // montblanc 1-8-15-22-29-36-43
+        .colors(['#7AC36A','#F15A60','#737373','#D77FB4']); 
 
     var energystatsright = ab.series.energystats()
         .xScale(xScale)
         .yScale(yScalePower)
         .yAlign('right')
-        .colors(['#7393bc','#81a7d4','#88b0d4','#a1c0d4','#d1cdc4','#cbc0ae','#78797e']); // montblanc 4-11-18-25-32-39-46
+        .colors(['#5A9BD4','#FAA75B','#9e67AB','#CE7058']); 
 
     // Prepare temperature detail (intra-day, lazy-loaded) series
     var detailTemp = ab.series.temperatureintraday()
@@ -319,8 +281,6 @@ define([
     var tempDailyTrackerSeries = plotArea.append('g')
         .attr('class', 'tempdailytracker');
 
-
-
     var yAxisTempBarSeries = plotChart.append('g')
         .attr('class', 'y_bar axis');
 
@@ -342,7 +302,7 @@ define([
         // Plot axes
         plotChart.append('g')
             .attr('class', 'x axis')
-            .attr('transform', 'translate(0,' + height + ')')
+            .attr('transform', 'translate(0,' + (height-legend_height) + ')')
             .call(xAxis);
 
         plotChart.append('g')
@@ -352,57 +312,38 @@ define([
         plotChart.append('g')
             .attr('class', 'y_power axis')
             .attr('transform', 'translate('+ width +',0)')
-            .append('g')
+            .append('text')
                 .attr('class','y_power label')
-                .attr('transform', 'translate(0,' + (height-upper_height) + ')')
-                .append('text')
-                    .text('Wh');
-    } 
+                .attr('transform', 'translate(-20,' + (height-detail_height) + ') rotate(-90)')
+                .attr("y", 6)
+                .attr("dy", ".71em")
+                .style("text-anchor", "end")
+                .text('Wh');
+
+        plotChart.append('g')
+            .attr('class', 'y_power axis')
+            .attr('transform', 'translate('+ width +',0)')
+            .append('text')
+                .attr('class','y_power label')
+                .attr('transform', 'translate(-20,' + (height-detail_height) + ') rotate(-90)')
+                .attr("y", 6)
+                .attr("dy", ".71em")
+                .style("text-anchor", "end")
+                .text('Wh');
+
+        // Prepare legend for detail-chart
+        plotChart.append('g')
+            .attr('class','detail legend')
+            .attr('transform', 'translate(0,' + height + ')');
+      } 
 
   
-/*    function fillMissingDays(data,extent,fillerData,useLastObject) {
-        var period = d3.time.day;
-        var timeScale = d3.time.scale();
-        timeScale.domain(extent).ticks(period);
-        var newData = timeScale.ticks(period)
-               .map(function(bucket) {
-                    var foundObj = _.find(data,{ date: bucket });
-                    var retObj;
-                    if (foundObj) {
-                        retObj = foundObj;
-                        if (useLastObject === true) { // update filler with object found 
-                            fillerData = foundObj;
-                        }
-                    } else {
-                        retObj = _.clone(fillerData);
-                        retObj.date = bucket;
-                        retObj.exception = 'nodata'; // add exception flag indicating false data
-                    }
-                    return retObj;
-                });
-//        console.log(newData);
-        return newData;
-    }
-*/
-
     // Await all (preload) data before continuing 
-    preload_q.awaitAll(function(error, results) { 
-        console.log(results);
-        // results[0] = temperature data (daily)
-        // results[1] = power data (daily)
+    preload_q.await(function(error, tempdata) { 
+        if (error) throw error;
+        //console.log(tempdata);
 
-        var fullXextent = d3.extent(results[0], function(d) { return d.date; }); // get full domain 
-
-/*        var tempDataFiller = {  
-                temp_avg : 0.0,
-                temp_min : 0.0,
-                temp_max : 0.0,
-                hum_avg : 100.0
-            };
-
-        tempData = fillMissingDays(results[0],fullXextent,tempDataFiller,true); // 
-*/
-        tempData = results[0] 
+        tempData = tempdata; 
 
         // Draw axes based on initial data
         plotAxes(tempData);
@@ -412,8 +353,6 @@ define([
 
         // Assign data to series that are drawn from start (lazy loaded data assign later)
         tempDailySeries.datum(tempData);
-        //powerDailySeries.datum(powerdata);
-        //powerStatsSeries.datum(powerStatsData);
         tempDailyTrackerSeries.datum(tempData);    
 
         var temprange = _.range(yScale.domain()[0],yScale.domain()[1]+1);
@@ -654,8 +593,9 @@ define([
 
     function redrawChart() {
 
-        var visibleDomain = xScale.domain()[1] - xScale.domain()[0];
+        var visibleMillis = xScale.domain()[1] - xScale.domain()[0];
         //console.log("Drawing X-domain "+xScale.domain()[0]+" to "+xScale.domain()[1]);
+
         var dataDomain = [
             new Date(_.max([xScale.domain()[0].valueOf() - 2*8.64e7,minDate])),     // 2 days extra data rendered outside of clippath
             new Date(_.min([xScale.domain()[1].valueOf() + 2*8.64e7,maxDate]))
@@ -674,7 +614,7 @@ define([
         var temprange = _.range(yScale.domain()[0],yScale.domain()[1]);
         yAxisTempBarSeries.datum(temprange);
 
-        if (visibleDomain < showDetailAtLessThanDays*8.64e7) { // less than X days visible 
+        if (visibleMillis < showDetailAtLessThanDays*8.64e7) { // less than X days visible 
             //console.log(temperatureDetailData)
             //temperatureDetailData = loadAndDrawDetailData(dataDomain);
             loadAndDrawDetailData(dataDomain);
@@ -714,10 +654,37 @@ define([
 
         plotChart.select('.y.axis').call(yAxis);
         plotChart.select('.x.axis').call(xAxis);
-        plotChart.select('.y-power.axis').call(yAxisPower);
+        plotChart.select('.y_power.axis').call(yAxisPower);
 
     }
  
+    function parseCombo(data) { 
+        var values = [], keys = [], stack = 0.0, dispoffset = 0.0, NaNvalue = 0.0
+        var value_keys = d3.keys(data).filter(function(key) { return key !== 'ts'; })
+        var pTsUTC = d3.time.format.utc("%Y-%m-%dT%H:%M:%S.%L").parse;  //  e.g. 2015-01-01T00:25:29.000
+        for (var k of value_keys) { // add all key/value pairs to map except key='ts', add property exc = 'nodata' if value = 'NaN'  
+            values.push({
+                'name': k,
+                'value': data[k] !== 'NaN' ? +data[k] : +NaNvalue,
+                'stack': stack += data[k] !== 'NaN' ? +data[k] : +NaNvalue,
+                'exc': data[k] === 'NaN' && 'nodata',
+            });
+            var dispname = !(typeof energyDataMap[k] === 'undefined') ? energyDataMap[k] : k
+            keys.push({
+                'name': k,
+                'dispname': dispname,
+                'dispoffset': dispoffset += (''+dispname).length,
+                'exc': data[k] === 'NaN' && 'nodata',
+            });
+         }
+        return { 
+            date : pTsUTC(data.ts.substring(0,data.ts.length-4)),   // '2016-01-22T22:05:04.000000Z' -> '2016-01-22T22:05:04.000' truncate microseconds(and Z) from utc timestamp since JavaScript doesn't handle it well
+            keys : keys,
+            total : values[values.length -1].stack,
+            disptotal : keys[keys.length-1].dispoffset,
+            values : values
+        }; 
+    }
 
     function loadAndDrawDetailData(dataDomain) {
         // Asynchronously loading detailed data (when needed) and draws the series
@@ -760,49 +727,15 @@ define([
                 }; 
             });
             //  power?q=energywater&datatypes=c2_delta&aggrto=H&aggrhow=sum&aggrlabel=left&tz=Europe/Helsinki&mindate=20160101&maxdate=20160102
-            filename = "/power?q=energywater&datatypes=c1_delta,c3_delta&aggrto=H&aggrhow=sum&aggrlabel=left&tz=Europe/Helsinki&mindate="+d0+"&maxdate="+d1;
-            var pTsUTC = d3.time.format.utc("%Y-%m-%dT%H:%M:%S.%L").parse;  //  e.g. 2015-01-01T00:25:29.000
-            lazyload_q.defer(d3.csv, filename, function(data) { 
-                var values = [], stack = 0.0, NaNvalue = 0.0
-                var value_keys = d3.keys(data).filter(function(key) { return key !== 'ts'; })
-                for (var k of value_keys) { // add all key/value pairs to map except key='ts', add property exc = 'nodata' if value = 'NaN'  
-                    values.push({
-                        'name': k,
-                        'value': data[k] !== 'NaN' ? +data[k] : +NaNvalue,
-                        'stack': stack += data[k] !== 'NaN' ? +data[k] : +NaNvalue,
-                        'exc': data[k] === 'NaN' && 'nodata',
-                    });
-                 }
-                return { 
-                    date : pTsUTC(data.ts.substring(0,data.ts.length-4)),   // '2016-01-22T22:05:04.000000Z' -> '2016-01-22T22:05:04.000' truncate microseconds(and Z) from utc timestamp since JavaScript doesn't handle it well
-                    keys : value_keys,
-                    total : values[values.length -1].stack,
-                    values : values
-                }; 
-            });
+            //filename = "/power?q=energywater&datatypes=c1_delta,c3_delta&aggrto=H&aggrhow=sum&aggrlabel=left&tz=Europe/Helsinki&mindate="+d0+"&maxdate="+d1;
+            // http://abox.local:8889/power?q=combined&combo=indirect0&mindate=20160201&maxdate=20160202&aggrto=H&aggrhow=sum&aggrlabel=left
+            filename = "/power?q=combined&combo=indirect0&aggrto=H&aggrhow=sum&aggrlabel=left&tz=Europe/Helsinki&mindate="+d0+"&maxdate="+d1;
+            lazyload_q.defer(d3.csv, filename, parseCombo);
             //  power?q=energywater&datatypes=c2_delta&aggrto=H&aggrhow=sum&aggrlabel=left&tz=Europe/Helsinki&mindate=20160101&maxdate=20160102
-            filename = "/power?q=energywater&datatypes=c2_delta&aggrto=H&aggrhow=sum&aggrlabel=left&tz=Europe/Helsinki&mindate="+d0+"&maxdate="+d1;
-            var pTsUTC = d3.time.format.utc("%Y-%m-%dT%H:%M:%S.%L").parse;  //  e.g. 2015-01-01T00:25:29.000
-            lazyload_q.defer(d3.csv, filename, function(data) { 
-                var values = [], stack = 0.0, NaNvalue = 0.0
-                var value_keys = d3.keys(data).filter(function(key) { return key !== 'ts'; })
-                for (var k of value_keys) { // add all key/value pairs to map except key='ts', add property exc = 'nodata' if value = 'NaN'  
-                    values.push({
-                        'name': k,
-                        'value': data[k] !== 'NaN' ? +data[k] : +NaNvalue,
-                        'stack': stack += data[k] !== 'NaN' ? +data[k] : +NaNvalue,
-                        'exc': data[k] === 'NaN' && 'nodata',
-                    });
-                 }
-                return { 
-                    date : pTsUTC(data.ts.substring(0,data.ts.length-4)),   // '2016-01-22T22:05:04.000000Z' -> '2016-01-22T22:05:04.000' truncate microseconds(and Z) from utc timestamp since JavaScript doesn't handle it well
-                    keys : value_keys,
-                    total : values[values.length -1].stack,
-                    values : values
-                }; 
-            });
+            //filename = "/power?q=energywater&datatypes=c2_delta&aggrto=H&aggrhow=sum&aggrlabel=left&tz=Europe/Helsinki&mindate="+d0+"&maxdate="+d1;
+            filename = "/power?q=combined&combo=indirect1&aggrto=H&aggrhow=sum&aggrlabel=left&tz=Europe/Helsinki&mindate="+d0+"&maxdate="+d1;
+            lazyload_q.defer(d3.csv, filename, parseCombo);
 
-            //http://abox.local:8889/power?q=powerstats&mindate=20160105&maxdate=20160201&datatypes=all_use&aggrto=D&aggrhow=sum&aggrlabel=right&tz=Europe/Helsinki
         }
         lazyload_q.await(function(error, temp, power, water, energyindirect) { 
             if (error) throw error;
@@ -829,8 +762,8 @@ define([
             }
 
             if (!(typeof water === 'undefined')) { // waterstats, add new data to existing, union to only not add duplicates, sort result
-                console.log('water')
-                console.log(water)
+                //console.log('water')
+                //console.log(water)
                 energyStatsLeftData = _.chain(energyStatsLeftData)
                     .unionBy(water, function(d){return d.date.valueOf();})
                     .sortBy(function(d){return d.date.valueOf();})
@@ -859,17 +792,18 @@ define([
 
             var energyStatsLeftData_slice = _.partition(energyStatsLeftData,function(d) { return (d.date > dataDomain[0] && d.date < dataDomain[1]); });
             energyStatsLeftSeries.datum(energyStatsLeftData_slice[0]);
+            
 
             var energyStatsRightData_slice = _.partition(energyStatsRightData,function(d) { return (d.date > dataDomain[0] && d.date < dataDomain[1]); });
             energyStatsRightSeries.datum(energyStatsRightData_slice[0]);
 
-            var mx1 = d3.max(powerStatsData_slice[0], function(d) { return d.value; }),
-                mx2 = d3.max(energyStatsLeftData_slice[0], function(d) { return d.value; }),
-                mx3 = d3.max(energyStatsRightData_slice[0], function(d) { return d.value; })
-            yScalePower.domain([0, d3.max([mx1,mx2,mx3])]).nice();
+            var mx1 = d3.max(powerStatsData_slice[0], function(d) { return (d.date > xScale.domain()[0] && d.date < xScale.domain()[1] && d.value); }),
+                mx2 = d3.max(energyStatsLeftData_slice[0], function(d) { return (d.date > xScale.domain()[0] && d.date < xScale.domain()[1] && d.total); }),
+                mx3 = d3.max(energyStatsRightData_slice[0], function(d) { return (d.date > xScale.domain()[0] && d.date < xScale.domain()[1] && d.total); })
+            yScalePower.domain([0, d3.max([mx1,mx2,mx3])]);
 
             plotChart.select('.y_power.axis').call(yAxisPower);
-            powerStatsSeries.call(powerstats);
+            //powerStatsSeries.call(powerstats);
             energyStatsLeftSeries.call(energystatsleft);
             energyStatsRightSeries.call(energystatsright);
 

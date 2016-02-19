@@ -9,7 +9,7 @@ define ([
         var xScale = d3.time.scale(),
             yScale = d3.scale.linear(),
             yAlign = 'full',   // default 'full'-width, other: 'left' = half-width-to-left, 'right' = half-width-to-right 
-            colors = ["#98abc5", "#8a89a6", "#7b6888", "#6b486b", "#a05d56", "#d0743c", "#ff8c00"]
+            colors = ['#737373','#F15A60','#7AC36A','#5A9BD4','#FAA75B','#9e67AB','#CE7058','#D77FB4'] // default colors
 
         var sidemargin = 5
 
@@ -21,13 +21,12 @@ define ([
             (rectangleHalfWidth > sidemargin) && (rectangleHalfWidth -= sidemargin)
 
             //rectangleHalfWidth = (yAlign ==='full' ? rectangleHalfWidth*2 : rectangleHalfWidth)
-
+            var width = xScale.range()[1]-xScale.range()[0];
             var color = d3.scale.ordinal().range(colors);
 
             selection.each(function (data) {
 
                 series = d3.select(this);
-
                 var bar = series.selectAll('.bar')
                     .data(data, function(d) { 
                         return d.date;
@@ -38,17 +37,41 @@ define ([
                         'bar' : true
                      })
                     .attr("date", function(d) { return d.date; });
-                    
 
                 bar.exit().remove();
 
                 bar = series.selectAll('.bar')
                     .attr("transform", function(d) { return "translate(" + (xScale(d.date) - rectangleHalfWidth + ((yAlign === 'right')?rectangleHalfWidth:0))+ ",0)"; });
 
+                var keys = []
                 if (data.length > 0) { 
-                    color.domain(data[0].keys)  // set color domain to array on 'name':s from first data-element
-                    //color.domain(data[0].values.map(function(d) { return d.name;}));  
+                    keys = data[0].keys
                 }
+                color.domain(keys.map(function (d) { return d.name; }))  // set color domain to array on 'name':s from first data-element
+                // add(or remove when keys = []) legend
+                var legend = d3.select('.detail.legend').selectAll('.legendentry.'+yAlign)
+                    .data(keys, function(d){return d.name;});
+                
+                var legendEnter = legend.enter().append('g')
+                    .attr('class','legendentry '+yAlign);
+                
+                legendEnter.append('rect')
+                    .attr("width", 18)
+                    .attr("height", 18);
+
+                legendEnter.append('text')
+                    .attr('x',24)
+                    .attr('y',9)
+                    .attr("dy", ".35em")
+                    .style("text-anchor", "begin");
+                
+                legend.exit().remove();
+
+                //legend.attr("transform", function(d, i) { return "translate("+ i * 100 + ",0)"; });
+                legend.attr("transform", function(d,i) { return "translate("+ ((yAlign === 'right' ? width/2 : 0) + (d.dispoffset-d.dispname.length)*10 + i*24) + ",0)"; });
+                legend.selectAll('rect').style("fill", function(d) { return color(d.name);});
+                legend.selectAll('text').text(function(d) { return d.dispname; });
+
                 // Draw stacked rectangles
 
                 var rect = bar.selectAll('rect')
@@ -65,8 +88,8 @@ define ([
                     .attr('y', function(d) {return yScale(d.stack); })
                     .attr('height', function(d) {return yScale(d.stack-d.value)- yScale(d.stack); });
 
-            }); // selection.each
 
+            }); // selection.each
 
         };      //  var enerygystats
 

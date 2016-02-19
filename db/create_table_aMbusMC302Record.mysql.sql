@@ -42,36 +42,36 @@ CREATE TABLE IF NOT EXISTS aMbusMC302Record(
 CREATE TABLE aWaterEnergyStats (
     id INT(11) UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
     groupNanoTs BIGINT(20) NOT NULL,
-    c1_producer BOOLEAN DEFAULT 0, /* by default the circuit is considered a consumer, ie producer = False or 0 */
-    c1_use INT(11),
+    c1_indirect BOOLEAN DEFAULT 0, /* by default the circuit is considered a consumer, ie producer = False or 0 */
+    c1_delta INT(11),
     c1_cumul INT(11),
     c1_peak INT(11),
-    c2_producer BOOLEAN DEFAULT 0,
-    c2_use INT(11),
+    c2_indirect BOOLEAN DEFAULT 0,
+    c2_delta INT(11),
     c2_cumul INT(11),
     c2_peak INT(11),
-    c3_producer BOOLEAN DEFAULT 0,
-    c3_use INT(11),
+    c3_indirect BOOLEAN DEFAULT 0,
+    c3_delta INT(11),
     c3_cumul INT(11),
     c3_peak INT(11),
-    c4_producer BOOLEAN DEFAULT 0,
-    c4_use INT(11),
+    c4_indirect BOOLEAN DEFAULT 0,
+    c4_delta INT(11),
     c4_cumul INT(11),
     c4_peak INT(11),
-    c5_producer BOOLEAN DEFAULT 0,
-    c5_use INT(11),
+    c5_indirect BOOLEAN DEFAULT 0,
+    c5_delta INT(11),
     c5_cumul INT(11),
     c5_peak INT(11),
-    c6_producer BOOLEAN DEFAULT 0,
-    c6_use INT(11),
+    c6_indirect BOOLEAN DEFAULT 0,
+    c6_delta INT(11),
     c6_cumul INT(11),
     c6_peak INT(11),
-    c7_producer BOOLEAN DEFAULT 0,
-    c7_use INT(11),
+    c7_indirect BOOLEAN DEFAULT 0,
+    c7_delta INT(11),
     c7_cumul INT(11),
     c7_peak INT(11),
-    c8_producer BOOLEAN DEFAULT 0,
-    c8_use INT(11),
+    c8_indirect BOOLEAN DEFAULT 0,
+    c8_delta INT(11),
     c8_cumul INT(11),
     c8_peak INT(11),
     measures_count INT(11),
@@ -82,30 +82,67 @@ CREATE TABLE aWaterEnergyStats (
     UNIQUE (groupNanoTs)
 );
 
+INSERT INTO aWaterEnergyStats (groupNanoTs,measures_count,deltaNanoTs,groupTimestamp
+  ,c1_peak,c1_cumul,c1_delta
+  ,c2_peak,c2_cumul,c2_delta
+  ,c3_peak,c3_cumul,c3_delta
+  ) 
+  SELECT CAST(aa.gts AS SIGNED) as groupNanoTs,aa.cnt,aa.ts_prev as deltaNanoTs, FROM_UNIXTIME(aa.gts/1e9) as groupTimestamp,
+    aa.c1_peak,aa.c1_cumul,if(aa.ts_prev < 0,NULL,aa.c1_cumul-aa.c1_prev) as c1_delta,  
+    aa.c2_peak,aa.c2_cumul,if(aa.ts_prev < 0,NULL,aa.c2_cumul-aa.c2_prev) as c2_delta,  
+    aa.c3_peak,aa.c3_cumul,if(aa.ts_prev < 0,NULL,aa.c3_cumul-aa.c3_prev) as c3_delta 
+    FROM (
+        SELECT t1.gts,t1.cnt
+          , if( @prev_ts > -1 && (t1.gts - @prev_ts) < (2*@grpsec) , @prev_ts, -1) AS ts_prev
+          , t1.c1_peak,t1.c1_cumul
+          , if( @prev_ts > -1 && (t1.gts - @prev_ts) < (2*@grpsec) && @prev_c1_cumul > -1, @prev_c1_cumul, -1 ) AS c1_prev
+          , t2.c2_peak,t2.c2_cumul
+          , if( @prev_ts > -1 && (t1.gts - @prev_ts) < (2*@grpsec) && @prev_c2_cumul > -1, @prev_c2_cumul, -1 ) AS c2_prev
+          , t3.c3_peak,t3.c3_cumul
+          , if( @prev_ts > -1 && (t1.gts - @prev_ts) < (2*@grpsec) && @prev_c3_cumul > -1, @prev_c3_cumul, -1 ) AS c3_prev
+          , @prev_ts := t1.gts  
+          , @prev_c1_cumul := t1.c1_cumul
+          , @prev_c2_cumul := t2.c2_cumul
+          , @prev_c3_cumul := t3.c3_cumul
+          FROM 
+            (SELECT (recordNanoTs DIV @grpsec)*@grpsec+@grpsec as gts, 
+                  MAX(power) AS c1_peak, 
+                  MAX(heatingEnergy) AS c1_cumul, 
+                  count(rowId) AS cnt 
+                  FROM aMbusMC302Record
+                  WHERE id = '67285016'
+                  AND recordNanoTs >= @ts 
+                  AND recordNanoTs < @maxts /* skip currently running minute */
+                  GROUP BY gts
+                ) t1 LEFT JOIN  
+                ((SELECT (recordNanoTs DIV @grpsec)*@grpsec+@grpsec as gts, 
+                  MAX(power) AS c2_peak, 
+                  MAX(heatingEnergy) AS c2_cumul 
+                  FROM aMbusMC302Record
+                  WHERE id = '67285015'
+                  AND recordNanoTs >= @ts 
+                  AND recordNanoTs < @maxts /* skip currently running minute */
+                  GROUP BY gts
+                ) t2,
+                (SELECT (recordNanoTs DIV @grpsec)*@grpsec+@grpsec as gts, 
+                  MAX(power) AS c3_peak, 
+                  MAX(heatingEnergy) AS c3_cumul 
+                  FROM aMbusMC302Record
+                  WHERE id = '67280331'
+                  AND recordNanoTs >= @ts 
+                  AND recordNanoTs < @maxts /* skip currently running minute */
+                  GROUP BY gts
+                ) t3) ON (t2.gts=t1.gts AND t3.gts=t1.gts) ,  
+            (select 
+                @prev_ts := IFNULL((select (t.recordNanoTs DIV @grpsec)*@grpsec+@grpsec FROM aMbusMC302Record t WHERE id = '67285016' AND recordNanoTs < @ts ORDER BY recordNanoTs DESC LIMIT 1),-1)
+                ,@prev_c1_cumul := IFNULL((select t.heatingEnergy FROM aMbusMC302Record t WHERE id = '67285016' AND recordNanoTs < @ts ORDER BY recordNanoTs DESC LIMIT 1),-1)
+                ,@prev_c2_cumul := IFNULL((select t.heatingEnergy FROM aMbusMC302Record t WHERE id = '67285015' AND recordNanoTs < @ts ORDER BY recordNanoTs DESC LIMIT 1),-1)
+                ,@prev_c3_cumul := IFNULL((select t.heatingEnergy FROM aMbusMC302Record t WHERE id = '67280331' AND recordNanoTs < @ts ORDER BY recordNanoTs DESC LIMIT 1),-1)
+                FROM (select @ts := 0, @grpsec := 60e9, @maxts := (UNIX_TIMESTAMP() DIV 60)*60e9) TS 
+                ) SQLVars
+    ) aa
+    ;
 
-SELECT 
-  t2.gts,t2.gts2,t2.mts,t2.c1_peak,t2.c1_cumul,t2.cnt
-  , if( @prev_ts > -1 && (t2.gts - @prev_ts) < (2*@grpsec) , @prev_ts, -1) AS ts_prev
-  , if( @prev_ts > -1 && (t2.gts - @prev_ts) < (2*@grpsec) && @prev_c1_cumul > -1, @prev_c1_cumul, -1 ) AS c1_prev
-  , @prev_ts := t2.gts  
-  , @prev_c1_cumul := t2.c1_cumul
-  FROM 
-    (SELECT (t1.recordNanoTs DIV @grpsec)*@grpsec+@grpsec as gts, 
-      FROM_UNIXTIME(((t1.recordNanoTs DIV @grpsec)*@grpsec+@grpsec)/1e9) as gts2,
-      max(t1.recordTimestamp) as mts, 
-      MAX(t1.power) AS c1_peak, 
-      MAX(t1.heatingEnergy) AS c1_cumul, 
-      count(t1.rowId) AS cnt 
-      FROM
-      aMbusMC302Record t1
-      WHERE id = '67285016' AND
-      AND recordNanoTs >= @ts 
-      AND recordNanoTs < @maxts /* skip currently running minute */
-      GROUP BY gts
-    ) t2,  
-    (select @prev_ts := IFNULL((select (t.recordNanoTs DIV @grpsec)*@grpsec+@grpsec FROM aMbusMC302Record t WHERE id = '67285016' AND recordNanoTs < @ts ORDER BY rowId DESC LIMIT 1),-1)
-            , @prev_c1_cumul := IFNULL((select t.heatingEnergy FROM aMbusMC302Record t WHERE id = '67285016' AND recordNanoTs < @ts ORDER BY rowId DESC LIMIT 1),-1)
-    FROM (select @ts := 0, @grpsec := 60e9, @maxts := (UNIX_TIMESTAMP() DIV 60)*60e9) TS ) SQLVars
 LIMIT 10;
 
     FROM (select @ts := 1453732800000000000, @grpsec := 60e9, @maxts := (UNIX_TIMESTAMP() DIV 60)*60e9) TS ) SQLVars
